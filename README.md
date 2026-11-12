@@ -94,7 +94,7 @@ localStorage.removeItem('dsh-sidebar-rail:off')
 
 ## 安装
 
-在 DSH **0.2.2-rc.1**（及兼容版本）上开发与验证。
+在 DSH **0.2.1-rc.2**（`engines.dsh` 声明为 `>=0.2.1-rc.1 <0.3.0-0`）上开发与验证。
 
 ### 从 GitHub 装（推荐）
 

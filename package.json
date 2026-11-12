@@ -14,6 +14,7 @@
   "files": [
     "client.js",
     "index.mjs",
+    "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
@@ -36,7 +37,7 @@
   "homepage": "https://github.com/boonelueng/dsh-sidebar-rail#readme",
   "engines": {
     "node": ">=24.9.0",
-    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.1 <0.3.0-0"
   },
   "dsh": {
     "bundle": {
