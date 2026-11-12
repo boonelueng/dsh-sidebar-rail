@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-sidebar-rail 拖拽回归台</title>
+<style>
+  /* 复刻 DSH 侧边栏外壳的关键布局（只保留影响几何的部分，不复制视觉细节） */
+  html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, sans-serif; background: #f5f5f5; }
+  #col { width: 280px; height: 100%; background: #fbfbfb; border-right: .5px solid #e3e3e3; }
+  #root { display: flex; flex-direction: column; height: 100%; box-sizing: border-box;
+          padding: 6px 8px; position: relative; background: #fbfbfb; }
+  .logoRow { height: 60px; display: flex; align-items: center; gap: 6px; }
+  .newSession { height: 38px; border: 0; border-radius: 8px; background: #eee; margin-bottom: 8px; }
+  .panelList { display: flex; flex-direction: column; gap: 2px; flex: none; margin-bottom: 8px; }
+  .panelRow { display: flex; align-items: center; gap: 6px; min-height: 36px; border: 0;
+              background: transparent; border-radius: 8px; padding: 7px 12px; text-align: left;
+              font: inherit; color: #111; cursor: pointer; }
+  .panelRow:hover { background: #ececec; }
+  .panelGlyph { display: inline-flex; flex: none; }
+  .panelTitle { white-space: nowrap; }
+  .regionArea { flex: 1; min-height: 0; display: flex; flex-direction: column;
+                overflow: hidden; margin-left: -4px; padding-left: 4px; }
+  .sessionList { flex: 1; min-height: 0; overflow: auto; }
+  .sessionRow { height: 32px; display: flex; align-items: center; padding: 0 8px;
+                border-radius: 8px; color: #333; }
+  .footArea { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; }
+</style>
+</head>
+<body>
+<div id="col">
+  <div id="root">
+    <div class="logoRow">
+      <span data-slot="sidebar.brand.mark"></span>
+      <span data-slot="sidebar.brand.name">HARNESS</span>
+    </div>
+    <button class="newSession" type="button"><span class="newSessionContent">新会话</span></button>
+    <nav class="panelList" aria-label="全局面板">
+      <button class="panelRow" type="button" aria-label="插件">
+        <span class="panelGlyph"><span data-slot="sidebar.panellist">&#9672;</span></span>
+        <span class="panelTitle">插件</span>
+      </button>
+      <button class="panelRow" type="button" aria-label="自动化任务">
+        <span class="panelGlyph"><span data-slot="sidebar.panellist">&#9783;</span></span>
+        <span class="panelTitle">自动化任务</span>
+      </button>
+      <button class="panelRow" type="button" aria-label="技能中心">
+        <span class="panelGlyph"><span data-slot="sidebar.panellist">&#10022;</span></span>
+        <span class="panelTitle">技能中心</span>
+      </button>
+      <button class="panelRow" type="button" aria-label="客服">
+        <span class="panelGlyph"><span data-slot="sidebar.panellist">&#9742;</span></span>
+        <span class="panelTitle">客服</span>
+      </button>
+      <button class="panelRow" type="button" aria-label="MCP连接器">
+        <span class="panelGlyph"><span data-slot="sidebar.panellist">&#9903;</span></span>
+        <span class="panelTitle">MCP连接器</span>
+      </button>
+      <button class="panelRow" type="button" aria-label="更多" aria-haspopup="menu" aria-expanded="false">
+        <span class="panelGlyph"><span data-slot="sidebar.panellist">&#8943;</span></span>
+        <span class="panelTitle">更多</span>
+      </button>
+    </nav>
+    <div class="regionArea">
+      <div class="sessionList" data-slot="sidebar.workspaces">
+        <div class="sessionRow">会话一</div>
+        <div class="sessionRow">会话二</div>
+        <div class="sessionRow">会话三</div>
+      </div>
+    </div>
+    <div class="footArea">
+      <div data-slot="sidebar.settings"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 最小 __ModuleLoader__ 桩：只捕获模块工厂，不参与 DSH 真实依赖解析
+  window.__moduleCapture = null;
+  window.__ModuleLoader__ = {
+    load: function (mod) { window.__moduleCapture = mod; }
+  };
+</script>
+<script src="../client.js"></script>
+<script>
+  (function () {
+    var mod = window.__moduleCapture;
+    if (!mod) { document.title = "LOAD-FAIL"; return; }
+    var exportsObj = mod.factory(function (name) {
+      throw new Error("unexpected require: " + name);
+    });
+    // 桩 ctx：只提供插件真正会用到的面。slots.inject 只记录不回调，
+    // 因此不需要 react，也不会渲染设置页。
+    var injected = [];
+    var registered = [];
+    var fakeCtx = {
+      get: function () { return null; },
+      effect: function () { return function () {}; },
+      logger: { warn: function () {} },
+      slots: {
+        inject: function (key, cb) { injected.push(key); return function () {}; },
+        register: function (opts, Comp) { registered.push(opts && opts.name); return function () {}; },
+        subscribe: function () { return function () {}; },
+        entriesOfSlot: function () { return []; },
+        getVersion: function () { return 0; }
+      }
+    };
+    exportsObj.apply(fakeCtx);
+    function navButtons() {
+      return Array.from(document.querySelectorAll('[data-dsh-rail-part="nav"] > button'))
+        .filter(function (b) {
+          return !(b.getAttribute("aria-haspopup") === "menu" || b.hasAttribute("aria-expanded"));
+        });
+    }
+    window.__HARNESS__ = {
+      injected: injected,
+      registered: registered,
+      labelsInDomOrder: function () {
+        return navButtons().map(function (b) { return b.getAttribute("aria-label"); });
+      },
+      visualNavOrder: function () {
+        return navButtons()
+          .sort(function (a, b) { return a.getBoundingClientRect().top - b.getBoundingClientRect().top; })
+          .map(function (b) { return b.getAttribute("aria-label"); });
+      },
+      visualEntryOrder: function () {
+        return Array.from(document.querySelectorAll('[data-dsh-rail-part="custom"] .dsr-btn'))
+          .filter(function (b) { return !b.classList.contains("dsr-toggle"); })
+          .sort(function (a, b) { return a.getBoundingClientRect().top - b.getBoundingClientRect().top; })
+          .map(function (b) { return b.getAttribute("aria-label"); });
+      }
+    };
+  })();
+</script>
+</body>
+</html>

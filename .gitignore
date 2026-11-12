@@ -7,8 +7,11 @@ probe-prompt-result.json
 probe-prompt-session-result.json
 probe-persist-result.json
 probe-final-result.json
+drag-probe-result.json
+verify-drag-result.json
 shot-*.png
 .probe-chrome-profile*/
+.probe-chrome-dragv/
 
 # 依赖
 node_modules/

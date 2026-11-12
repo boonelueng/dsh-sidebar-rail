@@ -27,6 +27,7 @@ window.__ModuleLoader__.load({
     const STORAGE_CUSTOM = "dsh-sidebar-rail.custom.v1";
     const STORAGE_OFF = "dsh-sidebar-rail:off";
     const STORAGE_EXPANDED = "dsh-sidebar-rail.railExpanded.v1";
+    const STORAGE_NAV_ORDER = "dsh-sidebar-rail.navOrder.v1";
     const SETTINGS_SECTION = "settings.section";
     const SETTINGS_SECTION_ID = "dsh-sidebar-rail.settings";
     /** 轨道（功能区）宽度：收起为窄条，展开为带文字标签的宽条 */
@@ -463,6 +464,25 @@ window.__ModuleLoader__.load({
       "border-top:.5px solid var(--dsw-alias-border-l3);font-size:13px}",
       '[data-dsh-rail-root][data-dsh-rail-expanded="1"] .dsr-toggle{width:100%;padding:0 10px}',
 
+      /* 拖拽排序：只动合成层，避免触发布局重排 */
+      '[data-dsh-rail-part="nav"],[data-dsh-rail-part="custom"]{touch-action:pan-y}',
+      /* 按钮自己接管指针：否则触控竖拖会被浏览器当成滚动，拖拽永远起不来 */
+      '[data-dsh-rail-part="nav"] button,[data-dsh-rail-part="custom"] .dsr-btn{touch-action:none;cursor:grab;',
+      "will-change:transform;-webkit-user-drag:none;user-select:none}",
+      "body.dsr-dragging-active,[data-dsh-rail-part] button.dsr-dragging{cursor:grabbing;user-select:none}",
+      /* 被拖起的原件留在原位当占位，半透明表示「它正在被移动」 */
+      "[data-dsh-rail-part] button.dsr-dragging{opacity:.32}",
+      ".dsr-ghost{opacity:.94;border-radius:var(--dsw-radius-sm,8px);",
+      "background:var(--dsw-specific-sidebar-fill,#fff);box-shadow:0 4px 14px rgba(0,0,0,.16);",
+      "display:flex;align-items:center;justify-content:center;font-size:15px;",
+      "color:var(--dsw-alias-label-primary,#111);box-sizing:border-box;will-change:top;",
+      "transform:translateZ(0)}",
+      ".dsr-ghost .dsr-btn-label{display:none}",
+      ".dsr-ghost.dsr-ghost-wide{justify-content:flex-start;padding:0 10px;gap:8px}",
+      ".dsr-ghost.dsr-ghost-wide .dsr-btn-label{display:inline;font-size:12.5px;",
+      "white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      "body.dsr-dragging-active{cursor:grabbing}",
+
       /* 设置页里的条目编辑器（跟随 DSH 主题色，不用写死的黑白） */
       ".dsr-settings-host{width:100%}",
       ".dsr-settings{display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:1.5;",
@@ -585,6 +605,7 @@ window.__ModuleLoader__.load({
               className: "dsr-btn",
               title: entry.label,
               "aria-label": entry.label,
+              "data-dsr-entry-id": entry.id,
               onClick: function () {
                 runEntry(entry);
               },
@@ -663,8 +684,302 @@ window.__ModuleLoader__.load({
       railSig = "";
       mountEl = el("div", { "data-dsh-rail-part": "custom", "data-dsh-rail-mount": "true" }, null);
       root.appendChild(mountEl);
+      attachDrag(mountEl);
       renderRail();
       diag.custom = true;
+    }
+
+    // ------------------------------------------------------------ drag reorder
+    /**
+     * 轨道图标拖拽排序。
+     *
+     * 分两个容器各自维护顺序：面板图标在 <nav> 里、自定义条目在挂载点里。
+     * 用 CSS `order` 改变排列（不动 DOM 结构），配合 Web Animations 做 FLIP，
+     * 这样拖拽过程中每一帧都是合成层变换，不会触发重排，滚动和拖拽都能保持流畅。
+     *
+     * 顺序：
+     *  - 面板图标按 aria-label 记住（DSH 没有暴露 panel id 到 DOM，「更多」按钮固定最后）
+     *  - 自定义条目按 entries 数组顺序
+     */
+    let navEl = null;
+    let navOrder = [];
+    let pendingDrag = null;
+    let activeDrag = null;
+
+    const DRAG_THRESHOLD = 4;
+
+    function navKeyOf(btn) {
+      return String(btn.getAttribute("aria-label") || "").trim();
+    }
+
+    /** 「更多」是菜单按钮，永远排在最后，不参与排序 */
+    function isMoreButton(btn) {
+      if (btn.getAttribute("aria-haspopup") === "menu") return true;
+      return btn.getAttribute("aria-expanded") !== null;
+    }
+
+    function loadNavOrder() {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_NAV_ORDER);
+        const parsed = raw === null ? [] : JSON.parse(raw);
+        navOrder = Array.isArray(parsed) ? parsed.map(String) : [];
+      } catch (err) {
+        navOrder = [];
+      }
+    }
+
+    function saveNavOrder() {
+      try {
+        window.localStorage.setItem(STORAGE_NAV_ORDER, JSON.stringify(navOrder));
+      } catch (err) {
+        diag.errors.push("nav-order-save: " + String(err));
+      }
+    }
+
+    /** 把记忆里的顺序落到 nav 的按钮上；没记录过的排在已记录项之后 */
+    function applyNavOrder(nav) {
+      if (nav === null) return;
+      // 拖拽期间不能重放：ghost 挂到 body 会触发 observer → sync，
+      // 此时若把 order 覆盖回已保存的顺序，拖动中的预览会被瞬间打回。
+      if (activeDrag !== null) return;
+      const rank = new Map();
+      for (let i = 0; i < navOrder.length; i += 1) rank.set(navOrder[i], i);
+      const buttons = Array.from(nav.querySelectorAll(":scope > button"));
+      let tail = navOrder.length;
+      for (const btn of buttons) {
+        if (isMoreButton(btn)) {
+          btn.style.order = "9999";
+          continue;
+        }
+        const key = navKeyOf(btn);
+        if (key.length === 0) continue;
+        const idx = rank.has(key) ? rank.get(key) : tail++;
+        btn.style.order = String(idx);
+      }
+    }
+
+    function railItemsOf(container) {
+      if (container === navEl) {
+        return Array.from(container.querySelectorAll(":scope > button")).filter(function (btn) {
+          return !isMoreButton(btn);
+        });
+      }
+      return Array.from(container.querySelectorAll(".dsr-btn")).filter(function (btn) {
+        return !btn.classList.contains("dsr-toggle");
+      });
+    }
+
+    function capturePositions(nodes) {
+      const map = new Map();
+      for (const node of nodes) map.set(node, node.getBoundingClientRect());
+      return map;
+    }
+
+    /** FLIP：把「排序前 → 排序后」的位移用动画补回去，形成连续的滑动感 */
+    function playFlip(nodes, before, duration) {
+      const ms = duration || 170;
+      for (const node of nodes) {
+        const b = before.get(node);
+        if (b === undefined) continue;
+        const a = node.getBoundingClientRect();
+        const dx = b.left - a.left;
+        const dy = b.top - a.top;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+        if (typeof node.animate !== "function") continue;
+        if (typeof node.getAnimations === "function") {
+          node.getAnimations().forEach(function (anim) {
+            anim.cancel();
+          });
+        }
+        node.animate(
+          [{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "translate(0px,0px)" }],
+          { duration: ms, easing: "cubic-bezier(.2,0,0,1)" }
+        );
+      }
+    }
+
+    function computeDropIndex(items, dragged, pointerY) {
+      let idx = 0;
+      for (const item of items) {
+        if (item === dragged) continue;
+        const r = item.getBoundingClientRect();
+        if (pointerY > r.top + r.height / 2) idx += 1;
+      }
+      return idx;
+    }
+
+    /** 拖动时实时重排：先算插入位，再改 order，最后用 FLIP 把位移补成动画 */
+    function reorderDuringDrag(state, pointerY) {
+      const items = railItemsOf(state.container);
+      const current = items.map(function (n) {
+        return n;
+      });
+      const rest = current.filter(function (n) {
+        return n !== state.item;
+      });
+      const idx = computeDropIndex(rest, state.item, pointerY);
+      const next = rest.slice(0, idx).concat([state.item], rest.slice(idx));
+      const before = capturePositions(current);
+      for (let i = 0; i < next.length; i += 1) next[i].style.order = String(i);
+      // 被拖起的那一项不参与 FLIP：它由跟随指针的 ghost 代表，原件只需留在原位当占位
+      const animating = current.filter(function (n) {
+        return n !== state.item;
+      });
+      playFlip(animating, before, 170);
+      state.previewKeys = next.map(function (n) {
+        return state.kind === "nav" ? navKeyOf(n) : n.getAttribute("data-dsr-entry-id") || "";
+      });
+    }
+
+    function startDrag(state, pointerY) {
+      state.item.classList.add("dsr-dragging");
+      const r = state.item.getBoundingClientRect();
+      const ghost = state.item.cloneNode(true);
+      // cloneNode 会把原件刚加上的 .dsr-dragging 一起复制过来，
+      // 导致跟随指针的 ghost 被压到 0.32 透明（看着像消失了），这里必须摘掉。
+      ghost.classList.remove("dsr-dragging");
+      ghost.classList.add("dsr-ghost");
+      if (railExpanded) ghost.classList.add("dsr-ghost-wide");
+      ghost.removeAttribute("data-dsr-entry-id");
+      ghost.style.cssText =
+        "position:fixed;left:" + r.left + "px;top:" + r.top + "px;width:" + r.width + "px;height:" + r.height +
+        "px;pointer-events:none;z-index:2147483000;margin:0;";
+      document.body.appendChild(ghost);
+      state.ghost = ghost;
+      state.grabOffset = pointerY - r.top;
+      state.active = true;
+      if (document.body) document.body.classList.add("dsr-dragging-active");
+      reorderDuringDrag(state, pointerY);
+    }
+
+    function moveDrag(state, pointerY) {
+      if (state.ghost !== null) {
+        const h = state.ghost.getBoundingClientRect().height;
+        state.ghost.style.top = pointerY - (state.grabOffset || h / 2) + "px";
+      }
+      reorderDuringDrag(state, pointerY);
+    }
+
+    /** 拖拽结束后：面板图标写 navOrder，自定义条目重排 entries 并保存 */
+    function endDrag(state, commit) {
+      if (state.ghost !== null) {
+        state.ghost.remove();
+        state.ghost = null;
+      }
+      state.item.classList.remove("dsr-dragging");
+      if (document.body) document.body.classList.remove("dsr-dragging-active");
+
+      if (commit !== false) {
+        const keys = state.previewKeys || [];
+        if (state.kind === "nav") {
+          if (keys.length > 0) {
+            navOrder = keys;
+            saveNavOrder();
+          }
+          if (navEl !== null) applyNavOrder(navEl);
+        } else {
+          const byId = new Map();
+          for (const e of entries) byId.set(e.id, e);
+          const next = [];
+          for (const id of keys) {
+            const found = byId.get(id);
+            if (found !== undefined) {
+              next.push(found);
+              byId.delete(id);
+            }
+          }
+          for (const leftover of byId.values()) next.push(leftover);
+          if (next.length === entries.length) saveEntries(next);
+        }
+      }
+      // 清掉拖拽期间的临时 order 之外的痕迹，并重新校准顺序
+      if (state.kind === "nav" && navEl !== null) applyNavOrder(navEl);
+    }
+
+    function suppressNextClick() {
+      const stop = function (event) {
+        event.stopPropagation();
+        event.preventDefault();
+        window.removeEventListener("click", stop, true);
+      };
+      window.addEventListener("click", stop, true);
+      window.setTimeout(function () {
+        window.removeEventListener("click", stop, true);
+      }, 400);
+    }
+
+    function onDragPointerMove(event) {
+      if (pendingDrag === null) return;
+      if (activeDrag === null) {
+        const dy = Math.abs(event.clientY - pendingDrag.y0);
+        const dx = Math.abs(event.clientX - pendingDrag.x0);
+        if (dy < DRAG_THRESHOLD && dx < DRAG_THRESHOLD) return;
+        activeDrag = pendingDrag;
+        startDrag(activeDrag, event.clientY);
+      }
+      if (activeDrag !== null) {
+        event.preventDefault();
+        moveDrag(activeDrag, event.clientY);
+      }
+    }
+
+    function onDragPointerUp() {
+      window.removeEventListener("pointermove", onDragPointerMove, true);
+      window.removeEventListener("pointerup", onDragPointerUp, true);
+      window.removeEventListener("pointercancel", onDragPointerUp, true);
+      const state = activeDrag;
+      pendingDrag = null;
+      activeDrag = null;
+      if (state !== null) {
+        endDrag(state, true);
+        suppressNextClick();
+      }
+    }
+
+    /** 插件卸载/退回原生布局时把拖拽残留全部清掉 */
+    function cancelDrag() {
+      window.removeEventListener("pointermove", onDragPointerMove, true);
+      window.removeEventListener("pointerup", onDragPointerUp, true);
+      window.removeEventListener("pointercancel", onDragPointerUp, true);
+      if (activeDrag !== null) {
+        endDrag(activeDrag, false);
+      }
+      pendingDrag = null;
+      activeDrag = null;
+      if (document.body) document.body.classList.remove("dsr-dragging-active");
+      document.querySelectorAll(".dsr-ghost").forEach(function (node) {
+        node.remove();
+      });
+      navEl = null;
+    }
+
+    function onRailPointerDown(event) {
+      if (event.button !== 0) return;
+      const container = event.currentTarget;
+      const item = event.target.closest("button");
+      if (item === null || !container.contains(item)) return;
+      if (item.classList.contains("dsr-toggle")) return;
+      if (container === navEl && isMoreButton(item)) return;
+      pendingDrag = {
+        container: container,
+        kind: container === navEl ? "nav" : "entry",
+        item: item,
+        x0: event.clientX,
+        y0: event.clientY,
+        ghost: null,
+        previewKeys: null,
+        active: false,
+      };
+      window.addEventListener("pointermove", onDragPointerMove, true);
+      window.addEventListener("pointerup", onDragPointerUp, true);
+      window.addEventListener("pointercancel", onDragPointerUp, true);
+    }
+
+    function attachDrag(container) {
+      if (container === null || container === undefined) return;
+      if (container.dataset.dsrDragBound === "1") return;
+      container.dataset.dsrDragBound = "1";
+      container.addEventListener("pointerdown", onRailPointerDown);
     }
 
     // ---------------------------------------------------------------- editor
@@ -1186,6 +1501,7 @@ window.__ModuleLoader__.load({
       });
       if (mountEl !== null) mountEl.remove();
       mountEl = null;
+      navEl = null;
       railSig = "";
       diag.tagged = false;
     }
@@ -1197,6 +1513,11 @@ window.__ModuleLoader__.load({
           if (child.hasAttribute("data-slot")) return;
           const name = child.tagName.toLowerCase();
           if (name === "svg") return;
+          // 只要这层里装着面板图标（[data-slot="sidebar.panellist"] 就在里面），
+          // 它就是图标包装层，绝不能隐藏 —— 否则用 emoji/字符作图标的第三方
+          // 面板会在轨道里整个消失（DSH 自己的图标是 SVG，textContent 为空，
+          // 所以以前没暴露；换成文本图标立刻踩到）。
+          if (child.querySelector('[data-slot="sidebar.panellist"]') !== null) return;
           if ((child.textContent || "").trim().length > 0) child.setAttribute(ATTR_HIDE, "1");
         });
       });
@@ -1251,6 +1572,11 @@ window.__ModuleLoader__.load({
         if (nav !== null) {
           nav.setAttribute(ATTR_PART, "nav");
           tagLabels(nav);
+          // 面板图标也支持拖拽排序：先绑定，再把记忆中的顺序落上去。
+          // React 重渲染会重建这些按钮，applyNavOrder 是幂等的，每次 sync 重放一遍即可。
+          navEl = nav;
+          attachDrag(navEl);
+          applyNavOrder(navEl);
         }
         region.setAttribute(ATTR_PART, "region");
 
@@ -1396,6 +1722,7 @@ window.__ModuleLoader__.load({
         window.removeEventListener("resize", resizeHandler);
         resizeHandler = null;
       }
+      cancelDrag();
       closeEditor();
       clearTags();
       settingsHost = null;
@@ -1435,6 +1762,9 @@ window.__ModuleLoader__.load({
 
       loadEntries();
       loadRailExpanded();
+      // 面板图标顺序必须在第一次 sync 之前读进来，否则刷新后 applyNavOrder
+      // 拿到空数组，会按 DOM 原始顺序重排，看起来像「顺序没保存」。
+      loadNavOrder();
       resetDraft();
       stylesDispose = installStyles();
 
