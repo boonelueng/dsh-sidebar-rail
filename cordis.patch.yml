@@ -1,0 +1,10 @@
+# dsh-sidebar-rail 的 bundle patch。
+#
+# 以 `dsh plugin --profile web add ...` 安装时，DSH 会把声明了 dsh.bundle.patch 的依赖
+# 自动加进 dsh.profile.bundles，因此这一行 insert 会自动生效，无需手工改 cordis.patch.yml。
+#
+# 若你走「手工放目录 + 自建 junction」的安装方式，请把下面同样的两行手工加到
+# ~/.dsh/profiles/web/cordis.patch.yml 末尾；两种方式**不要同时用**，否则会重复装载。
+- insert:
+    - id: dsh-sidebar-rail
+      name: dsh-sidebar-rail

@@ -15,7 +15,7 @@
 ├────┬──────────────────────────┤
 │ ●  │                          │
 │ ◈  │   会话 / 工作区列表      │  ← 右栏：原生 ui-workspace，占满剩余宽度
-│ ⚙  │   （搜索、分组、拖拽）   │
+│ ✦  │   （搜索、分组、拖拽）   │
 │    │                          │
 │ ✎  │                          │
 │ ◈  │                          │
@@ -135,7 +135,14 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/probe-panel2.cjs` | 设置页能否打开、「侧边栏条目」一节能否进入、`.dsr-settings-host` 是否有内容 |
 | `probes/probe-final.cjs` | 端到端回归：齿轮已消失、展开/收起、设置页里增 / 删 / 保存写回轨道、刷新后保持 |
 
-用法：`node probes/probe.cjs "<launch-url.txt 里的地址>"`。宿主侧 `index.mjs` 还提供 `GET/POST /dsh-sidebar-rail/report`，把最后一次运行诊断写到 `last-report.json`。
+用法：`node probes/probe.cjs "<带令牌的页面地址>"`。
+
+这些探针需要一个带启动令牌的地址。默认情况下宿主侧 `index.mjs` **什么都不做**；只有以 `DSH_SIDEBAR_RAIL_DEV=1` 启动 DSH 时，它才会：
+
+1. 把 `connection.authenticatedUrl()` 算出的带令牌地址写到本目录的 `launch-url.txt`（探针直接用它）；
+2. 注册 `GET/POST /dsh-sidebar-rail/report`，把浏览器端回传的诊断写到 `last-report.json`。
+
+这两项都是本地调试脚手架，且第 1 项会把访问凭据落盘，所以默认关闭——正常使用时不需要它们。
 
 ## 实现原理
 

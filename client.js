@@ -91,6 +91,8 @@ window.__ModuleLoader__.load({
     let reportSentKey = "";
     let reportFirst = true;
     let reportRetry = 0;
+    let reportMisses = 0;
+    let reportUnavailable = false;
 
     function reportKeyOf() {
       return JSON.stringify({
@@ -119,6 +121,7 @@ window.__ModuleLoader__.load({
 
     function sendReport() {
       reportPending = false;
+      if (reportUnavailable) return;
       let body = "";
       let key = "";
       try {
@@ -156,6 +159,18 @@ window.__ModuleLoader__.load({
             if (res && res.ok) {
               reportSentKey = key;
               reportRetry = 0;
+              reportMisses = 0;
+            } else if (res && res.status === 404) {
+              // 404 = 宿主没注册回传路由（正常安装形态：index.mjs 默认什么都不做）。
+              // 给 2 次机会容忍「路由比页面晚一步就绪」的热重载时序，之后本次页面生命周期内不再回传，
+              // 避免在控制台刷一串 404。
+              reportMisses += 1;
+              if (reportMisses >= 2) {
+                reportUnavailable = true;
+                reportRetry = 8;
+              } else {
+                retryReportLater();
+              }
             } else {
               retryReportLater();
             }

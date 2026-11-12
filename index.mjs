@@ -1,9 +1,14 @@
 // dsh-sidebar-rail — 宿主侧入口。
 //
-// 浏览器端（./client.js）负责把 DSH 左侧边栏改成「左窄条功能区 + 右侧会话区」并列；
-// 宿主侧只做一件事：开一条本地回传通道，让浏览器端把运行时诊断写进
-//   <本目录>/last-report.json
-// 这样排查时不需要用户手动开控制台抄 __DSH_RAIL__。
+// 浏览器端（./client.js）负责把 DSH 左侧边栏改成「左窄条功能区 + 右侧会话区」并列。
+// 宿主侧默认 **什么都不做**，不影响 DSH 的任何行为。
+//
+// 只有在设置了环境变量 DSH_SIDEBAR_RAIL_DEV=1 时，才会开启本地开发脚手架：
+//   1. 把带启动令牌的页面地址写到 <本目录>/launch-url.txt —— 供无头浏览器做端到端回归。
+//   2. 注册 GET/POST /dsh-sidebar-rail/report —— 让浏览器端把运行时诊断写到 <本目录>/last-report.json。
+//
+// 这两项都属于**本地调试**能力，且第一条会把带令牌的地址落盘，
+// 所以默认关闭：它会把访问凭据写到磁盘上，不应该成为每个人的默认行为。
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -13,6 +18,7 @@ export const name = 'dsh-sidebar-rail'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPORT_FILE = join(HERE, 'last-report.json')
+const DEV = process.env.DSH_SIDEBAR_RAIL_DEV === '1'
 
 function writeReport(payload) {
   try {
@@ -33,6 +39,7 @@ function readReport() {
 }
 
 export function apply(ctx) {
+  if (!DEV) return
   if (!ctx || typeof ctx.inject !== 'function') return
 
   // 把带启动令牌的页面地址写到本目录，供本地无头浏览器直接打开做端到端验证。
@@ -87,6 +94,7 @@ export function apply(ctx) {
               } catch (_) {
                 payload = { parseError: true }
               }
+              if (payload === null || typeof payload !== 'object') payload = { invalid: true }
               payload.receivedAt = new Date().toISOString()
               payload.userAgent = String(req.headers['user-agent'] || '')
               writeReport(payload)
