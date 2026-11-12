@@ -1,0 +1,45 @@
+{
+  "name": "dsh-sidebar-rail",
+  "version": "1.0.0",
+  "description": "Parallel lanes for the DeepSeek Harness left sidebar: a narrow function rail on the left, the conversation list on the right, plus custom entries.",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": {
+      "default": "./client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "client.js",
+    "index.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "sidebar",
+    "ui"
+  ],
+  "license": "MIT",
+  "author": "boonelueng",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boonelueng/dsh-sidebar-rail.git"
+  },
+  "bugs": {
+    "url": "https://github.com/boonelueng/dsh-sidebar-rail/issues"
+  },
+  "homepage": "https://github.com/boonelueng/dsh-sidebar-rail#readme",
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  }
+}

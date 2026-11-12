@@ -1,0 +1,14 @@
+# 运行时产物，不要提交
+last-report.json
+launch-url.txt
+probe-result.json
+interact-result.json
+probe-prompt-result.json
+probe-prompt-session-result.json
+probe-persist-result.json
+probe-final-result.json
+shot-*.png
+.probe-chrome-profile*/
+
+# 依赖
+node_modules/
