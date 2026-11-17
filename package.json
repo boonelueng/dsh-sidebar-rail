@@ -23,10 +23,21 @@
     "deepseek-harness",
     "dsh-plugin",
     "sidebar",
-    "ui"
+    "ui",
+    "ai-assisted"
   ],
   "license": "MIT",
   "author": "boonelueng",
+  "contributors": [
+    {
+      "name": "boonelueng",
+      "url": "https://github.com/boonelueng"
+    },
+    {
+      "name": "DeepSeek Harness coding agent (AI)"
+    }
+  ],
+  "aiAssistance": "Implemented largely by an AI coding agent (DeepSeek Harness); requirements, technical decisions and final acceptance were made by the human maintainer. See the README section “关于 AI 参与”.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/boonelueng/dsh-sidebar-rail.git"
