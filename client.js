@@ -1657,6 +1657,33 @@ window.__ModuleLoader__.load({
       return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
     }
 
+    /**
+     * 按下时把「允许的位移范围」算一次。
+     *
+     * 拖动中 applyFloat 是早退的（位置由 transform 独占，不能每帧重量几何），
+     * 所以拖动过程不做夹取；如果只在松手那一刻才夹，用户会看到轨道先跟手
+     * 到视口边缘、松手又突然被推回来——这就是「放开鼠标闪一下」的来源。
+     * 把夹取提前摊到拖动过程中，松手时坐标已经合法，clampFloat 不再改动它，
+     * 视觉上就完全连续。
+     */
+    function floatDragBounds() {
+      const pos = clampFloat(floatX, floatY);
+      const w = railWidthPx;
+      const vw = window.innerWidth || 0;
+      const vh = window.innerHeight || 0;
+      const h = floatHeight() || 200;
+      const minX = 8;
+      const minY = 8;
+      const maxX = Math.max(8, vw - w - 8);
+      const maxY = Math.max(8, vh - h - 8);
+      return {
+        minDx: minX - pos.x,
+        maxDx: maxX - pos.x,
+        minDy: minY - pos.y,
+        maxDy: maxY - pos.y,
+      };
+    }
+
     /** 只在该变量确实变化时才写：无谓的 setProperty 会让整棵子树重算样式 */
     function setVar(node, name, value) {
       if (node.style.getPropertyValue(name) === value) return false;
@@ -1874,7 +1901,7 @@ window.__ModuleLoader__.load({
       event.preventDefault();
       const startX = floatX;
       const startY = floatY;
-      floatDrag = { x0: event.clientX, y0: event.clientY, sx: startX, sy: startY, active: false, dx: 0, dy: 0 };
+      floatDrag = { x0: event.clientX, y0: event.clientY, sx: startX, sy: startY, active: false, dx: 0, dy: 0, bounds: null };
       // 缓存位移目标：拖动每帧都要写，别在 DSH 的深层 DOM 里反复 querySelector
       if (floatRoot !== null) {
         floatLayers = [
@@ -1901,12 +1928,17 @@ window.__ModuleLoader__.load({
       if (!floatDrag.active) {
         if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
         floatDrag.active = true;
+        // 夹取范围只算一次：拖动过程中视口与轨道尺寸不会变
+        floatDrag.bounds = floatDragBounds();
         if (document.body) document.body.classList.add("dsr-float-dragging");
       }
       event.preventDefault();
-      floatDrag.dx = dx;
-      floatDrag.dy = dy;
-      floatPending = { dx: dx, dy: dy };
+      const b = floatDrag.bounds;
+      const cdx = b === null ? dx : Math.min(Math.max(dx, b.minDx), b.maxDx);
+      const cdy = b === null ? dy : Math.min(Math.max(dy, b.minDy), b.maxDy);
+      floatDrag.dx = cdx;
+      floatDrag.dy = cdy;
+      floatPending = { dx: cdx, dy: cdy };
       if (floatRaf === 0) floatRaf = window.requestAnimationFrame(flushFloatFrame);
     }
 
@@ -1930,14 +1962,28 @@ window.__ModuleLoader__.load({
       floatDrag = null;
       floatLayers = null;
       if (d === null) return;
-      paintFloatDelta(0, 0);
-      if (!d.active) return;
+      if (!d.active) {
+        paintFloatDelta(0, 0);
+        return;
+      }
       if (document.body) document.body.classList.remove("dsr-float-dragging");
       floatX = d.sx + d.dx;
       floatY = d.sy + d.dy;
-      // 先落位（applyFloat 内部会把坐标夹进视口并写回 floatX/floatY），再存盘。
-      // 反过来的话会把视口外的坐标写进 localStorage，下次刷新还原到一个抓不到的位置。
+      /**
+       * 顺序很关键：**先落位、再清 transform**。
+       *
+       * transform 与 will-change 都由合成器线程处理，一清掉合成器马上就能把
+       * 轨道画回 CSS 变量所指的旧位置；而 left/top 这类布局属性必须等主线程
+       * 这一轮任务结束才提交。所以旧顺序（先 paintFloatDelta(0,0) 再 applyFloat）
+       * 会先闪回原位、再跳到新位——就是「放开鼠标闪一下」。
+       * 反过来先写变量，主线程在同一次样式重算里把位置更新掉，合成器拿到的
+       * 已经是终点坐标，没有中间态可显示。
+       *
+       * applyFloat 内部会把坐标夹进视口并回写 floatX/floatY，
+       * 所以必须落在 saveFloat 之前，否则会把视口外的坐标存进去。
+       */
       applyFloat(floatRootGood());
+      paintFloatDelta(0, 0);
       saveFloat();
       // 拖动期间 schedule 被冻结，松手后补一次同步把几何追平
       schedule();

@@ -12,10 +12,9 @@ float-probe-result.json
 verify-drag-result.json
 shot-*.png
 .probe-chrome-profile*/
-.probe-chrome-dragv/
-.probe-chrome-float/
-.probe-chrome-gap/
-.probe-chrome-seam/
+.probe-chrome-*/
+probes/.probe-chrome-*/
+probes/rel*/
 
 # 依赖
 node_modules/
