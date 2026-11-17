@@ -211,6 +211,36 @@ async function main() {
     })()`);
     check("悬浮：默认落位留出了右边距（>=20px，未被夹取贴边）",
       result.steps.rightGap.gap >= 20, result.steps.rightGap);
+    // 首次悬浮算出来的落位必须立刻写盘。以前 saveFloat 在算默认落位之前调用，
+    // 存进去的还是初始值 (12,120)——刷新后浮层弹到左上角压住会话区，
+    // 表现出来就是「启动悬浮后模块不衔接」。
+    result.steps.firstFloatStored = await evalJs(`(() => {
+      const raw = localStorage.getItem('dsh-sidebar-rail.float.v1');
+      const v = raw ? JSON.parse(raw) : null;
+      const root = window.__HARNESS__.root();
+      const nav = window.__HARNESS__.navBox().getBoundingClientRect();
+      return { stored: v, navX: Math.round(nav.x), navY: Math.round(nav.y) };
+    })()`);
+    check("悬浮：首次落位立刻写盘（存的不是初始值 12,120）",
+      result.steps.firstFloatStored.stored !== null &&
+      !(result.steps.firstFloatStored.stored.x === 12 && result.steps.firstFloatStored.stored.y === 120),
+      result.steps.firstFloatStored.stored);
+    check("悬浮：写盘坐标与实际落位一致（±2px）",
+      result.steps.firstFloatStored.stored !== null &&
+      Math.abs(result.steps.firstFloatStored.stored.x - result.steps.firstFloatStored.navX) <= 2 &&
+      Math.abs(result.steps.firstFloatStored.stored.y + 22 - result.steps.firstFloatStored.navY) <= 2,
+      result.steps.firstFloatStored);
+    // 三段（抓取条 / 面板图标 / 自定义条目）必须严丝合缝拼在一起
+    result.steps.seam = await evalJs(`(() => {
+      const q = (s) => document.querySelector(s);
+      const g = q('[data-dsh-rail-grip]').getBoundingClientRect();
+      const n = q('[data-dsh-rail-part="nav"]').getBoundingClientRect();
+      const c = q('[data-dsh-rail-part="custom"]').getBoundingClientRect();
+      return { gapGripNav: Math.round(n.top - g.bottom), gapNavCustom: Math.round(c.top - n.bottom) };
+    })()`);
+    check("悬浮：三段无缝衔接（抓手→图标→条目，间隙 0）",
+      Math.abs(result.steps.seam.gapGripNav) <= 1 && Math.abs(result.steps.seam.gapNavCustom) <= 1,
+      result.steps.seam);
     await shot("shot-float-floated.png");
 
     // ------------------------------------------------------------ 拖动抓手
@@ -341,6 +371,51 @@ async function main() {
       Math.abs(result.steps.afterReload.nav.x - keptX) <= 3 && Math.abs(result.steps.afterReload.nav.y - keptY) <= 3,
       { kept: [keptX, keptY], reload: result.steps.afterReload.nav });
     check("刷新后：无 diag 错误", (result.steps.afterReload.diagErrors || []).length === 0, result.steps.afterReload.diagErrors);
+    // 启动即悬浮：三段必须仍然拼在一起（--dsr-float-nav-h 若量到启动早期的小值就会裂开）
+    result.steps.reloadSeam = await evalJs(`(() => {
+      const q = (s) => document.querySelector(s);
+      const g = q('[data-dsh-rail-grip]').getBoundingClientRect();
+      const n = q('[data-dsh-rail-part="nav"]').getBoundingClientRect();
+      const c = q('[data-dsh-rail-part="custom"]').getBoundingClientRect();
+      const root = q('[data-dsh-rail-root]');
+      return {
+        gapGripNav: Math.round(n.top - g.bottom),
+        gapNavCustom: Math.round(c.top - n.bottom),
+        navH: Math.round(n.height),
+        navHVar: root.style.getPropertyValue('--dsr-float-nav-h'),
+        navScroll: document.querySelector('[data-dsh-rail-part="nav"]').scrollHeight,
+      };
+    })()`);
+    check("启动即悬浮：三段无缝衔接（间隙 0）",
+      Math.abs(result.steps.reloadSeam.gapGripNav) <= 1 && Math.abs(result.steps.reloadSeam.gapNavCustom) <= 1,
+      result.steps.reloadSeam);
+    check("启动即悬浮：--dsr-float-nav-h 等于 nav 实际高度（没有量到早期小值）",
+      result.steps.reloadSeam.navHVar === result.steps.reloadSeam.navH + "px",
+      { var: result.steps.reloadSeam.navHVar, actual: result.steps.reloadSeam.navH });
+    // 悬浮中面板图标增减（比如装了个新插件面板）会改 nav 高度：
+    // 下面的自定义条目必须跟着挪，否则就裂开一条缝。
+    result.steps.navGrow = await evalJs(`(async () => {
+      const nav = document.querySelector('[data-dsh-rail-part="nav"]');
+      const custom = document.querySelector('[data-dsh-rail-part="custom"]');
+      const before = { navH: Math.round(nav.getBoundingClientRect().height),
+                       gap: Math.round(custom.getBoundingClientRect().top - nav.getBoundingClientRect().bottom) };
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'panelRow'; b.setAttribute('aria-label', '临时面板');
+      b.innerHTML = '<span class="panelGlyph"><span data-slot="sidebar.panellist">&#9670;</span></span><span class="panelTitle">临时面板</span>';
+      nav.appendChild(b);
+      await new Promise((r) => setTimeout(r, 500));
+      const after = { navH: Math.round(nav.getBoundingClientRect().height),
+                      gap: Math.round(custom.getBoundingClientRect().top - nav.getBoundingClientRect().bottom) };
+      const root = document.querySelector('[data-dsh-rail-root]');
+      const v = root.style.getPropertyValue('--dsr-float-nav-h');
+      b.remove();
+      await new Promise((r) => setTimeout(r, 400));
+      return { before, after, navHVar: v };
+    })()`);
+    check("悬浮中 nav 长高后：自定义条目跟着下移（不裂开）",
+      result.steps.navGrow.after.navH > result.steps.navGrow.before.navH &&
+      Math.abs(result.steps.navGrow.after.gap) <= 1,
+      result.steps.navGrow);
     await shot("shot-float-reload.png");
 
     // ------------------------------------------------------------ 双击停靠

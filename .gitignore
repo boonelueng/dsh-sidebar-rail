@@ -14,6 +14,8 @@ shot-*.png
 .probe-chrome-profile*/
 .probe-chrome-dragv/
 .probe-chrome-float/
+.probe-chrome-gap/
+.probe-chrome-seam/
 
 # 依赖
 node_modules/

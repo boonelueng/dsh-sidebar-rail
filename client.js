@@ -409,8 +409,8 @@ window.__ModuleLoader__.load({
       "padding:0 0 calc(4px + var(--dsr-custom-h,0px))!important;",
       "box-sizing:border-box!important;",
       "overflow-y:auto;overflow-x:hidden;",
-      "border-right:.5px solid var(--dsw-alias-border-l3);",
-      "background:var(--dsw-specific-sidebar-fill);",
+      "border-right:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));",
+      "background:var(--dsw-specific-sidebar-fill,#fff);",
       "z-index:2;",
       "}",
       '[data-dsh-rail-root] > [data-dsh-rail-part="nav"] button{',
@@ -459,8 +459,8 @@ window.__ModuleLoader__.load({
       "position:absolute;left:0;bottom:var(--dsr-rail-bottom,0px);width:var(--dsr-rail-w,40px);max-height:60%;z-index:3;",
       "display:flex;flex-direction:column;align-items:center;gap:2px;",
       "padding:4px 0 6px;overflow-y:auto;overflow-x:hidden;",
-      "border-right:.5px solid var(--dsw-alias-border-l3);",
-      "background:var(--dsw-specific-sidebar-fill);",
+      "border-right:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));",
+      "background:var(--dsw-specific-sidebar-fill,#fff);",
       "}",
 
       /* 轨道按钮 */
@@ -474,43 +474,58 @@ window.__ModuleLoader__.load({
       ".dsr-btn-ico{display:block;line-height:1;flex:none}",
       /* 展开/收起按钮：贴在轨道最底部，与上面的条目之间留一条细线 */
       ".dsr-toggle{margin-top:4px;border-radius:0;width:36px;height:30px;",
-      "border-top:.5px solid var(--dsw-alias-border-l3);font-size:13px}",
+      "border-top:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));font-size:13px}",
       '[data-dsh-rail-root][data-dsh-rail-expanded="1"] .dsr-toggle{width:100%;padding:0 10px}',
 
       /* ---------------------------------------------------------------- 悬浮态
        * 整条轨道脱离侧边栏，固定在视口任意位置。
        * 注意选择器比基础 nav 规则多一个 [data-dsh-rail-float]，特异性更高，
        * 否则打不过前面那条带 !important 的绝对定位规则。
+       *
+       * 悬浮时这条轨道被拆成「抓取条 / 面板图标 / 自定义条目」三个兄弟节点各自定位。
+       * 它们要看起来像**一张**卡片，所以：外框线由三段各画左右两边拼成连续的一条，
+       * 而投影只留在最下面那一段——中间那段如果自己带向下投影，
+       * 正好会压在下一段的顶边上，变成一条横线，两块卡片就「接不上」了。
        */
       '[data-dsh-rail-root][data-dsh-rail-float="1"] > [data-dsh-rail-part="nav"]{',
       "position:fixed!important;left:var(--dsr-float-x,0px);",
       "top:calc(var(--dsr-float-y,0px) + 22px);bottom:auto!important;",
       "width:var(--dsr-float-w,40px)!important;height:auto!important;",
+      "box-sizing:border-box!important;",
       "max-height:calc(100vh - var(--dsr-float-y,0px) - 22px - 96px);",
-      "padding:4px 0!important;border:0!important;border-radius:0!important;",
-      "box-shadow:0 6px 24px rgba(0,0,0,.14),0 1px 3px rgba(0,0,0,.08);",
+      "padding:4px 0!important;border:0!important;",
+      "border-left:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))!important;",
+      "border-right:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))!important;",
+      "border-radius:0!important;box-shadow:none!important;",
       "z-index:2147482000;overflow-y:auto;will-change:transform;",
       "}",
       /* 自定义条目叠在面板图标下面；它自己的高度写完 --dsr-float-nav-h 后自动贴合 */
       '[data-dsh-rail-root][data-dsh-rail-float="1"] > [data-dsh-rail-part="custom"]{',
       "position:fixed!important;left:var(--dsr-float-x,0px);",
-      "top:calc(var(--dsr-float-y,0px) + 22px + var(--dsr-float-nav-h,0px));",
+      "top:calc(var(--dsr-float-y,0px) + 22px + var(--dsr-float-nav-h,0px) - 1px);",
       "bottom:auto!important;width:var(--dsr-float-w,40px)!important;max-height:none;",
-      "border:0!important;border-radius:0 0 var(--dsr-radius,12px) var(--dsr-radius,12px);",
-      "box-shadow:0 6px 24px rgba(0,0,0,.14);",
+      // 与 nav / grip 同为 border-box，否则左右各多 .5px，三段的框线会错半像素对不齐
+      "box-sizing:border-box!important;",
+      "border:0!important;",
+      "border-left:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))!important;",
+      "border-right:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))!important;",
+      "border-bottom:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))!important;",
+      "border-radius:0 0 var(--dsr-radius,12px) var(--dsr-radius,12px)!important;",
+      "box-shadow:0 8px 20px rgba(0,0,0,.12)!important;",
       "z-index:2147482000;will-change:transform;",
       "}",
       /* 顶部抓取条：悬浮态才存在，是唯一能拖动整条轨道的把手 */
       "[data-dsh-rail-grip]{",
       "position:fixed;left:var(--dsr-float-x,0px);top:var(--dsr-float-y,0px);",
-      "width:var(--dsr-float-w,40px);height:22px;",
+      "width:var(--dsr-float-w,40px);height:22px;box-sizing:border-box;",
       "display:flex;align-items:center;justify-content:center;",
       "cursor:grab;touch-action:none;-webkit-user-drag:none;",
       "user-select:none;font-size:11px;line-height:1;",
       "color:var(--dsw-alias-label-secondary);",
-      "background:var(--dsw-specific-sidebar-fill);",
+      "background:var(--dsw-specific-sidebar-fill,#fff);",
+      "border:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));border-bottom:0;",
       "border-radius:var(--dsr-radius,12px) var(--dsr-radius,12px) 0 0;",
-      "box-shadow:0 -2px 10px rgba(0,0,0,.05);",
+      "box-shadow:none;",
       "z-index:2147482001;will-change:transform;",
       "}",
       "[data-dsh-rail-grip]:hover{color:var(--dsw-alias-label-primary)}",
@@ -546,22 +561,22 @@ window.__ModuleLoader__.load({
       ".dsr-settings-host{width:100%}",
       ".dsr-settings{display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:1.5;",
       "color:var(--dsw-alias-label-primary);font-family:inherit}",
-      ".dsr-settings .dsr-row{border:1px solid var(--dsw-alias-border-l3);background:transparent}",
-      ".dsr-settings .dsr-ico{border:1px solid var(--dsw-alias-border-l3);background:transparent}",
+      ".dsr-settings .dsr-row{border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));background:transparent}",
+      ".dsr-settings .dsr-ico{border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));background:transparent}",
       ".dsr-settings .dsr-name{color:var(--dsw-alias-label-primary)}",
       ".dsr-settings .dsr-desc{color:var(--dsw-alias-label-secondary)}",
-      ".dsr-settings .dsr-mini{border:1px solid var(--dsw-alias-border-l3);background:transparent;",
+      ".dsr-settings .dsr-mini{border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));background:transparent;",
       "color:var(--dsw-alias-label-primary)}",
-      ".dsr-settings .dsr-mini:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l3);",
+      ".dsr-settings .dsr-mini:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l3,rgba(0,0,0,.08));",
       "color:var(--dsw-alias-label-primary)}",
       ".dsr-settings .dsr-mini:disabled{opacity:.35;background:transparent}",
       ".dsr-settings .dsr-input,.dsr-settings .dsr-area,.dsr-settings .dsr-select{",
-      "background:transparent;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l3)}",
+      "background:transparent;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))}",
       ".dsr-settings .dsr-label{color:var(--dsw-alias-label-secondary)}",
       ".dsr-settings .dsr-hint,.dsr-settings .dsr-empty,.dsr-settings .dsr-sub{",
       "color:var(--dsw-alias-label-secondary)}",
       ".dsr-settings .dsr-body{padding:0;overflow:visible}",
-      ".dsr-settings .dsr-foot{border-top:1px solid var(--dsw-alias-border-l3);padding-top:10px}",
+      ".dsr-settings .dsr-foot{border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));padding-top:10px}",
       ".dsr-settings .dsr-primary{background:var(--dsw-alias-state-business-primary);",
       "border-color:var(--dsw-alias-state-business-primary)}",
 
@@ -1594,6 +1609,9 @@ window.__ModuleLoader__.load({
     let floatLayers = null;
     /** 轨道宽度（px），由 applyRailState 维护，悬浮态直接复用 */
     let railWidthPx = RAIL_W;
+    /** 悬浮时盯住 nav 高度：面板图标增删会改高度，下面的自定义条目要跟着挪 */
+    let floatRO = null;
+    let floatROTarget = null;
 
     function loadFloat() {
       try {
@@ -1678,6 +1696,8 @@ window.__ModuleLoader__.load({
       const navH = nav === null ? 0 : Math.round(nav.getBoundingClientRect().height);
       setVar(root, "--dsr-float-nav-h", navH + "px");
       ensureGrip(root);
+      // nav 的高度是自定义条目定位的参照，启动那几拍可能还没长到最终值
+      watchFloatNav(root);
       diag.floating = true;
       diag.floatPos = { x: Math.round(floatX), y: Math.round(floatY), w: railWidthPx, navH: navH };
     }
@@ -1701,7 +1721,6 @@ window.__ModuleLoader__.load({
       const firstTime = next === true && floatX === 12 && floatY === 120;
       floating = next;
       railExpanded = next;
-      saveFloat();
       saveRailExpanded();
       // 先把展开态落下来：railWidthPx 要反映展开后的真实宽度，
       // 否则默认落位按 40px 算，随后会被夹取往左推，右侧只剩贴边的 8px。
@@ -1715,6 +1734,10 @@ window.__ModuleLoader__.load({
         floatY = Math.max(24, Math.round(vh * 0.18));
       }
       applyFloat(root);
+      // 落位之后再存盘：saveFloat 必须在 applyFloat 夹取、并把默认落位写回
+      // floatX/floatY 之后调用，否则存进去的还是 (12,120) 这种初始值，
+      // 刷新后浮层停在左上角压着会话区，看起来就是「启动后模块不衔接」。
+      saveFloat();
       // 图标/文案/aria 随 floating 与 railExpanded 变，必须重渲染一次轨道
       renderRail();
       scheduleReport();
@@ -1765,11 +1788,53 @@ window.__ModuleLoader__.load({
       void root;
     }
 
+    /**
+     * 盯住 nav 的高度。
+     *
+     * 悬浮时整条轨道被拆成「抓取条 / 面板图标 / 自定义条目」三段独立定位，
+     * 自定义条目的 top 是靠 --dsr-float-nav-h 算出来的。启动那一刻 nav 往往还没
+     * 长到最终高度（DSH 的面板列表是之后才渲染进来的、字体也可能晚一拍），
+     * 于是这个变量量到的是偏小的旧值——下面的自定义条目就停在错误的位置，
+     * 跟上面的图标段之间裂开一条缝或者压在一起，也就是「模块不衔接」。
+     * 所以这里持续观察，高度一变就补写。
+     */
+    function watchFloatNav(root) {
+      if (floatRO !== null && floatROTarget === root) return;
+      unwatchFloatNav();
+      if (typeof ResizeObserver !== "function") return;
+      const nav = root.querySelector('[' + ATTR_PART + '="nav"]');
+      if (nav === null) return;
+      floatROTarget = root;
+      floatRO = new ResizeObserver(function () {
+        if (!floating || root.getAttribute(ATTR_FLOAT) !== "1") return;
+        // 拖动中位置由 transform 独占，别再插一手让布局跟着跳
+        if (floatDrag !== null) return;
+        const h = Math.round(nav.getBoundingClientRect().height);
+        if (h <= 0) return;
+        setVar(root, "--dsr-float-nav-h", h + "px");
+        if (diag.floatPos !== null) diag.floatPos.navH = h;
+      });
+      floatRO.observe(nav);
+    }
+
+    function unwatchFloatNav() {
+      if (floatRO !== null) {
+        try {
+          floatRO.disconnect();
+        } catch (err) {
+          /* 忽略 */
+        }
+        floatRO = null;
+      }
+      floatROTarget = null;
+    }
+
     function removeGrip() {
       if (gripEl !== null) {
         gripEl.remove();
         gripEl = null;
       }
+      unwatchFloatNav();
       floatRoot = null;
     }
 
