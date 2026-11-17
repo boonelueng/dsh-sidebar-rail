@@ -60,17 +60,22 @@
 竖轨最底部的 **⧉（悬浮）/ ◱（停靠）** 按钮可以把整条轨道从侧边栏里拎出来，变成一块**浮在页面上的面板**，随便拖到 DSH 里任何位置：
 
 - 点 **⧉ 悬浮**：轨道脱离侧边栏，浮到视口右侧的空白处，会话列表立刻收回被占用的宽度（不再给轨道让位）
+- **悬浮会自动展开、停靠会自动收起**：40px 纯图标条浮在视口里认不清也难点，所以悬浮时直接把功能区的文字标签一起带出来（展开宽度约 130px，按侧边栏宽度自适应）；停靠回去则恢复 40px，不会越用越挤。悬浮态下仍可手动点 `«` 收起
 - 拖动轨道顶部的**抓手**（`⋮⋮` 那一条）就能移动，松手位置会记住
 - 拖到边缘会自动夹在视口内，缩窗口也不会跑丢
 - 双击抓手、或按 Enter / Space，等于再点一次 **◱ 停靠**，回到侧边栏原位
 - 状态存在 `localStorage` 的 `dsh-sidebar-rail.float.v1`（记 `{on, x, y}`），刷新后保持
-- 展开态下悬浮同样可用，浮层宽度跟着轨道宽度走
 
 流畅性做法：
 
 - 拖动过程中**只写 `translate3d`**（抓手 + 图标层 + 自定义条目层），绝不改 `left` / `top`，因此不触发布局重排
 - 指针事件用 `setPointerCapture` + `requestAnimationFrame` 合帧，一帧最多算一次位置，掉帧时不会堆积
+- **拖动期间冻结布局同步**：DSH 流式输出会不停改 DOM 触发我们的 `MutationObserver`，而每次同步都要量几何（强制同步布局）。拖动只改 `transform`，本来也不重量，所以拖动时直接跳过同步，松手后补一次
+- **CSS 变量与属性只在真变化时才写**：以前每帧无条件 `setProperty` / `setAttribute`，会让 `[data-dsh-rail-float]`、`[data-dsh-rail-expanded]` 下的整棵侧边栏子树反复重算样式——这是「拖起来 DSH 区域闪一下」的根因
+- 位移目标层在按下时缓存一次，不在每帧里 `querySelector`
 - 松手后才把最终坐标落盘并夹取，避免把视口外的坐标存进去
+
+回归里有专门的防回归断言：拖动全程用 `PerformanceObserver` 采集长任务，要求**没有超过 80ms 的主线程卡顿**（当前实测 0 个）。
 
 ## 自定义条目
 
@@ -168,7 +173,7 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/probe-panel2.cjs` | 设置页能否打开、「侧边栏条目」一节能否进入、`.dsr-settings-host` 是否有内容 |
 | `probes/probe-final.cjs` | 端到端回归：齿轮已消失、展开/收起、设置页里增 / 删 / 保存写回轨道、刷新后保持 |
 | `probes/drag-probe.cjs` | 拖拽排序：ghost / 半透明占位 / FLIP / `order` 变更 / 落盘 / 刷新还原 / 自定义条目重排 / 点击抑制 |
-| `probes/float-probe.cjs` | 悬浮：进出悬浮态、抓手出现、`translate3d` 拖动、坐标夹取与落盘、刷新还原、双击停靠、展开态宽度跟随、缩窗口不跑丢 |
+| `probes/float-probe.cjs` | 悬浮：进出悬浮态、自动展开/停靠自动收起、抓手出现、`translate3d` 拖动、坐标夹取与落盘、刷新还原、双击停靠、缩窗口不跑丢、**拖动无长任务** |
 
 `drag-probe.cjs` 与 `float-probe.cjs` 自带静态回归台 `probes/drag-harness.html`（复刻 DSH 侧边栏 DOM 骨架 + 加载真实 `client.js`），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
 
@@ -199,6 +204,7 @@ DSH 的槽渲染器给每个槽套一层 `<div data-slot="<槽名>" style="displ
 - 侧边栏宽度仍受 DSH 自身 264–420px 限制（本插件不改这个上限）。窗口很窄时会比较挤，此时可以收起侧边栏用原生形态。
 - 折叠态（56px）下不接管，保持原生图标条。
 - 悬浮态是**浮层**，不参与 DSH 布局：它会盖在页面内容上面。默认落在视口右侧空白处，若你想让它出现在别处，拖过去即可。
+- 悬浮会顺带把展开态打开（停靠时关回去）。如果你更想保持 40px 纯图标条漂浮，进去后手动点一下 `«` 收起即可，位置不会丢。
 - 依赖 `[data-slot="sidebar.workspaces"]` 等锚点；DSH 若大改侧边栏结构，`__DSH_RAIL__.anchors` 会指出哪一项失效，此时插件自动退回原生布局而不会破坏界面。
 
 ## 许可

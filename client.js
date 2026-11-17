@@ -314,12 +314,18 @@ window.__ModuleLoader__.load({
         width = Math.max(RAIL_W + 40, Math.min(RAIL_W_EXPANDED, budget));
         if (!Number.isFinite(width) || width < RAIL_W) width = RAIL_W;
       }
-      root.setAttribute("data-dsh-rail-expanded", railExpanded ? "1" : "0");
-      root.style.setProperty("--dsr-rail-w", width + "px");
+      const wantAttr = railExpanded ? "1" : "0";
+      // 这两个写操作都会让 [data-dsh-rail-expanded] 下的整棵子树重算样式。
+      // sync() 每帧都可能被 DSH 的 DOM 变动唤起，值没变就不要重写。
+      if (root.getAttribute("data-dsh-rail-expanded") !== wantAttr) {
+        root.setAttribute("data-dsh-rail-expanded", wantAttr);
+      }
+      setVar(root, "--dsr-rail-w", width + "px");
+      const widthChanged = width !== railWidthPx;
       railWidthPx = width;
       diag.expanded = railExpanded;
       diag.railWidth = width;
-      measureCustom();
+      if (widthChanged) measureCustom();
       // 悬浮态下变量是固定的参照系，宽度/位置要跟着一起刷新
       if (floating) applyFloat(root);
     }
@@ -720,7 +726,7 @@ window.__ModuleLoader__.load({
       const root = mountEl.parentElement;
       if (root === null) return;
       const height = Math.ceil(mountEl.getBoundingClientRect().height);
-      root.style.setProperty("--dsr-custom-h", (height + 4) + "px");
+      setVar(root, "--dsr-custom-h", (height + 4) + "px");
       measureRailBounds(root);
       // 悬浮态下自定义条目是独立固定层，高度变了要重新贴合
       if (floating) applyFloat(root);
@@ -742,8 +748,8 @@ window.__ModuleLoader__.load({
       const borderBottom = parseFloat(cs.borderBottomWidth) || 0;
       const top = Math.max(0, Math.round(regionRect.top - rootRect.top - borderTop));
       const bottom = Math.max(0, Math.round(rootRect.bottom - regionRect.bottom - borderBottom));
-      root.style.setProperty("--dsr-rail-top", top + "px");
-      root.style.setProperty("--dsr-rail-bottom", bottom + "px");
+      setVar(root, "--dsr-rail-top", top + "px");
+      setVar(root, "--dsr-rail-bottom", bottom + "px");
 
       // 会话区左边距：让会话区紧贴轨道右边缘（轨道 40px 宽 + 边框，再留 1px 呼吸）
       const nav = root.querySelector('[' + ATTR_PART + '="nav"]');
@@ -752,7 +758,7 @@ window.__ModuleLoader__.load({
         const rootPadLeft = parseFloat(cs.paddingLeft) || 0;
         // region 的 margin-left 与 root 的 padding-left 共同决定它的左边界
         const ml = Math.max(0, navW + 1 - rootPadLeft);
-        root.style.setProperty("--dsr-region-ml", ml + "px");
+        setVar(root, "--dsr-region-ml", ml + "px");
       }
     }
 
@@ -1584,6 +1590,8 @@ window.__ModuleLoader__.load({
     let floatDrag = null;
     let floatRaf = 0;
     let floatPending = null;
+    /** 拖动期间要跟着位移的层（nav + 自定义条目），按下时缓存一次 */
+    let floatLayers = null;
     /** 轨道宽度（px），由 applyRailState 维护，悬浮态直接复用 */
     let railWidthPx = RAIL_W;
 
@@ -1631,60 +1639,101 @@ window.__ModuleLoader__.load({
       return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
     }
 
+    /** 只在该变量确实变化时才写：无谓的 setProperty 会让整棵子树重算样式 */
+    function setVar(node, name, value) {
+      if (node.style.getPropertyValue(name) === value) return false;
+      node.style.setProperty(name, value);
+      return true;
+    }
+
     /** 把位置落到 root 上的 CSS 变量；这是唯一会触发布局的地方 */
     function applyFloat(root) {
       if (root === null || root === undefined) return;
       if (!floating) {
-        root.removeAttribute(ATTR_FLOAT);
-        root.style.removeProperty("--dsr-float-x");
-        root.style.removeProperty("--dsr-float-y");
-        root.style.removeProperty("--dsr-float-w");
-        root.style.removeProperty("--dsr-float-nav-h");
+        if (root.hasAttribute(ATTR_FLOAT)) root.removeAttribute(ATTR_FLOAT);
+        if (root.style.getPropertyValue("--dsr-float-x") !== "") {
+          root.style.removeProperty("--dsr-float-x");
+          root.style.removeProperty("--dsr-float-y");
+          root.style.removeProperty("--dsr-float-w");
+          root.style.removeProperty("--dsr-float-nav-h");
+        }
         diag.floating = false;
         removeGrip();
         return;
       }
-      root.setAttribute(ATTR_FLOAT, "1");
+      // 拖动中位置由 transform 表达，这里再写一遍变量等于每帧强制同步布局：
+      // clampFloat → floatHeight → getBoundingClientRect，正是闪烁与掉帧的来源。
+      if (floatDrag !== null && floatDrag.active) return;
+      // 属性选择器 [data-dsh-rail-float="1"] 命中整棵子树：
+      // 值没变还反复 setAttribute 会白白让这些规则失效重算，拖动时尤其明显。
+      if (root.getAttribute(ATTR_FLOAT) !== "1") root.setAttribute(ATTR_FLOAT, "1");
       floatRoot = root;
       const pos = clampFloat(floatX, floatY);
       floatX = pos.x;
       floatY = pos.y;
-      root.style.setProperty("--dsr-float-x", Math.round(floatX) + "px");
-      root.style.setProperty("--dsr-float-y", Math.round(floatY) + "px");
-      root.style.setProperty("--dsr-float-w", railWidthPx + "px");
+      setVar(root, "--dsr-float-x", Math.round(floatX) + "px");
+      setVar(root, "--dsr-float-y", Math.round(floatY) + "px");
+      setVar(root, "--dsr-float-w", railWidthPx + "px");
       const nav = root.querySelector('[' + ATTR_PART + '="nav"]');
       const navH = nav === null ? 0 : Math.round(nav.getBoundingClientRect().height);
-      root.style.setProperty("--dsr-float-nav-h", navH + "px");
+      setVar(root, "--dsr-float-nav-h", navH + "px");
       ensureGrip(root);
       diag.floating = true;
       diag.floatPos = { x: Math.round(floatX), y: Math.round(floatY), w: railWidthPx, navH: navH };
     }
 
-    function toggleFloat() {
-      floating = !floating;
-      saveFloat();
+    /**
+     * 进入 / 退出悬浮。
+     *
+     * 悬浮时轨道离开侧边栏的定高容器，40px 纯图标条在视口里太难点，
+     * 所以进入悬浮就自动展开、停靠回来就自动收起——用户不必再单独点一次展开键。
+     */
+    function setFloating(on) {
+      const next = on === true;
       const root = document.querySelector("[" + ATTR_ROOT + "]");
-      if (floating && floatX === 12 && floatY === 120) {
-        // 首次悬浮：默认丢到视口右侧空白处。
-        // 不能贴着侧边栏右侧放——悬浮后会话区的左边距被释放了，
-        // 贴着放会正好压住会话标题，等于「浮起来反而更差」。
+      if (floating === next) {
+        applyFloat(root);
+        renderRail();
+        return;
+      }
+      // 首次悬浮要换默认落位；必须在 applyFloat 夹取之前判断，
+      // 否则夹取会把 (12,120) 改掉，这次判断就永远为假了。
+      const firstTime = next === true && floatX === 12 && floatY === 120;
+      floating = next;
+      railExpanded = next;
+      saveFloat();
+      saveRailExpanded();
+      // 先把展开态落下来：railWidthPx 要反映展开后的真实宽度，
+      // 否则默认落位按 40px 算，随后会被夹取往左推，右侧只剩贴边的 8px。
+      if (root !== null) applyRailState(root);
+      if (firstTime) {
+        // 默认丢到视口右侧空白处。不能贴着侧边栏右侧放——悬浮后会话区的
+        // 左边距被释放了，贴着放会正好压住会话标题，等于「浮起来反而更差」。
         const vw = window.innerWidth || 0;
         const vh = window.innerHeight || 0;
         floatX = Math.max(8, vw - railWidthPx - 24);
         floatY = Math.max(24, Math.round(vh * 0.18));
       }
       applyFloat(root);
-      // 按钮的图标/文案/aria 都随 floating 变，必须重渲染一次轨道
+      // 图标/文案/aria 随 floating 与 railExpanded 变，必须重渲染一次轨道
       renderRail();
       scheduleReport();
+    }
+
+    function toggleFloat() {
+      setFloating(!floating);
     }
 
     // ------------------------------------------------------------- grip handle
     function ensureGrip(root) {
       if (gripEl !== null && gripEl.isConnected) {
-        gripEl.style.setProperty("--dsr-float-x", Math.round(floatX) + "px");
-        gripEl.style.setProperty("--dsr-float-y", Math.round(floatY) + "px");
-        gripEl.style.setProperty("--dsr-float-w", railWidthPx + "px");
+        // 拖动中这几条变换由 paintFloatDelta 独占，别再插一手写变量，
+        // 否则每帧都要重算一次样式，还会和位移打架。
+        if (floatDrag === null) {
+          setVar(gripEl, "--dsr-float-x", Math.round(floatX) + "px");
+          setVar(gripEl, "--dsr-float-y", Math.round(floatY) + "px");
+          setVar(gripEl, "--dsr-float-w", railWidthPx + "px");
+        }
         return;
       }
       removeGrip();
@@ -1704,20 +1753,12 @@ window.__ModuleLoader__.load({
       gripEl.style.setProperty("--dsr-float-w", railWidthPx + "px");
       gripEl.addEventListener("pointerdown", onGripPointerDown);
       gripEl.addEventListener("dblclick", function () {
-        floating = false;
-        saveFloat();
-        applyFloat(document.querySelector("[" + ATTR_ROOT + "]"));
-        renderRail();
-        scheduleReport();
+        setFloating(false);
       });
       gripEl.addEventListener("keydown", function (event) {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          floating = false;
-          saveFloat();
-          applyFloat(document.querySelector("[" + ATTR_ROOT + "]"));
-          renderRail();
-          scheduleReport();
+          setFloating(false);
         }
       });
       document.body.appendChild(gripEl);
@@ -1732,11 +1773,21 @@ window.__ModuleLoader__.load({
       floatRoot = null;
     }
 
-    /** 拖动中把位移写到三个悬浮层的 transform 上（不触发布局） */
+    /**
+     * 拖动中把位移写到三个悬浮层的 transform 上（不触发布局）。
+     *
+     * 三层元素在按下时缓存一次：拖动每帧都要用，反复 querySelector
+     * 会在 DSH 这种深层 DOM 上白白烧掉主线程时间。
+     */
     function paintFloatDelta(dx, dy) {
-      const t = "translate3d(" + dx + "px," + dy + "px,0)";
+      const t = dx === 0 && dy === 0 ? "" : "translate3d(" + dx + "px," + dy + "px,0)";
       if (gripEl !== null) gripEl.style.transform = t;
-      if (floatRoot !== null) {
+      const layers = floatLayers;
+      if (layers !== null) {
+        for (const node of layers) {
+          if (node !== null && node.isConnected) node.style.transform = t;
+        }
+      } else if (floatRoot !== null) {
         const nav = floatRoot.querySelector('[' + ATTR_PART + '="nav"]');
         const custom = floatRoot.querySelector('[' + ATTR_PART + '="custom"]');
         if (nav !== null) nav.style.transform = t;
@@ -1759,6 +1810,15 @@ window.__ModuleLoader__.load({
       const startX = floatX;
       const startY = floatY;
       floatDrag = { x0: event.clientX, y0: event.clientY, sx: startX, sy: startY, active: false, dx: 0, dy: 0 };
+      // 缓存位移目标：拖动每帧都要写，别在 DSH 的深层 DOM 里反复 querySelector
+      if (floatRoot !== null) {
+        floatLayers = [
+          floatRoot.querySelector('[' + ATTR_PART + '="nav"]'),
+          floatRoot.querySelector('[' + ATTR_PART + '="custom"]'),
+        ];
+      } else {
+        floatLayers = null;
+      }
       try {
         gripEl.setPointerCapture(event.pointerId);
       } catch (err) {
@@ -1803,6 +1863,7 @@ window.__ModuleLoader__.load({
       floatPending = null;
       const d = floatDrag;
       floatDrag = null;
+      floatLayers = null;
       if (d === null) return;
       paintFloatDelta(0, 0);
       if (!d.active) return;
@@ -1813,6 +1874,8 @@ window.__ModuleLoader__.load({
       // 反过来的话会把视口外的坐标写进 localStorage，下次刷新还原到一个抓不到的位置。
       applyFloat(floatRootGood());
       saveFloat();
+      // 拖动期间 schedule 被冻结，松手后补一次同步把几何追平
+      schedule();
       scheduleReport();
     }
 
@@ -1841,6 +1904,7 @@ window.__ModuleLoader__.load({
         gripEl.removeEventListener("pointercancel", onGripPointerUp);
       }
       floatDrag = null;
+      floatLayers = null;
       paintFloatDelta(0, 0);
       if (document.body) document.body.classList.remove("dsr-float-dragging");
     }
@@ -2036,6 +2100,10 @@ window.__ModuleLoader__.load({
 
     function schedule() {
       if (rafId !== 0) return;
+      // 拖动悬浮条期间冻结同步：DSH 流式输出会不停改 DOM 触发 observer，
+      // 每次 sync 都要量几何（强制同步布局），和拖拽抢主线程就是卡顿与闪烁的来源。
+      // 拖动只改 transform，本来也不需要重量几何；松手后补一次即可。
+      if (floatDrag !== null && floatDrag.active) return;
       const raf = window.requestAnimationFrame || function (fn) {
         return window.setTimeout(fn, 16);
       };

@@ -184,6 +184,9 @@ async function main() {
         floatNavH: root && root.style.getPropertyValue('--dsr-float-nav-h'),
         stored: localStorage.getItem('dsh-sidebar-rail.float.v1'),
         toggleLabel: (() => { const b = window.__HARNESS__.floatToggle(); return b && b.getAttribute('aria-label'); })(),
+        expandedAttr: root && root.getAttribute('data-dsh-rail-expanded'),
+        expandedStored: localStorage.getItem('dsh-sidebar-rail.railExpanded.v1'),
+        railWidthVar: root && root.style.getPropertyValue('--dsr-rail-w'),
       };
     })()`);
     check("悬浮：root 打上 data-dsh-rail-float", result.steps.floated.attr === "1", result.steps.floated.attr);
@@ -196,6 +199,18 @@ async function main() {
       result.steps.floated.region !== null && dockedRegion !== null && result.steps.floated.region.x <= dockedRegion.x,
       { docked: dockedRegion, floated: result.steps.floated.region });
     check("悬浮：按钮文案切换为「停靠」", result.steps.floated.toggleLabel === "停靠回侧边栏", result.steps.floated.toggleLabel);
+    // 悬浮后功能区自动展开：40px 图标条浮在视口里太难点，展开才认得清
+    check("悬浮：功能区自动展开（属性置 1）", result.steps.floated.expandedAttr === "1", result.steps.floated.expandedAttr);
+    check("悬浮：轨道确实变宽（>40）", result.steps.floated.nav !== null && result.steps.floated.nav.w > 40, result.steps.floated.nav);
+    check("悬浮：展开态已落盘", result.steps.floated.expandedStored === "1", result.steps.floated.expandedStored);
+    // 首次落位要留出可见的右边距：按展开宽度算 24px，不能被夹取推到只剩贴边的 8px
+    result.steps.rightGap = await evalJs(`(() => {
+      const nav = window.__HARNESS__.navBox();
+      const r = nav.getBoundingClientRect();
+      return { gap: Math.round(window.innerWidth - (r.x + r.width)), vw: window.innerWidth, w: Math.round(r.width) };
+    })()`);
+    check("悬浮：默认落位留出了右边距（>=20px，未被夹取贴边）",
+      result.steps.rightGap.gap >= 20, result.steps.rightGap);
     await shot("shot-float-floated.png");
 
     // ------------------------------------------------------------ 拖动抓手
@@ -211,11 +226,23 @@ async function main() {
     await sleep(60);
     await mouse("mouseMoved", gripPt.x - 5, gripPt.y + 5);
     await sleep(60);
+    // 拖动期间采集长任务：主线程若被同步布局卡住，这里会抓到 >50ms 的任务
+    await evalJs(`(() => {
+      window.__LONGTASKS__ = [];
+      window.__DROPLAYOUTS__ = 0;
+      try {
+        window.__PO__ = new PerformanceObserver((list) => {
+          for (const e of list.getEntries()) window.__LONGTASKS__.push(Math.round(e.duration));
+        });
+        window.__PO__.observe({ entryTypes: ['longtask'] });
+      } catch (e) { window.__PO__ = null; }
+      return true;
+    })()`);
     // 首次悬浮默认落在视口右侧，所以往左下拖才有不被夹取的余地
     const DX = -260, DY = 180;
-    for (const f of [0.3, 0.55, 0.8, 1]) {
+    for (const f of [0.15, 0.3, 0.45, 0.6, 0.7, 0.8, 0.9, 1]) {
       await mouse("mouseMoved", gripPt.x + Math.round(DX * f), gripPt.y + Math.round(DY * f));
-      await sleep(60);
+      await sleep(30);
     }
 
     result.steps.midDrag = await evalJs(`(() => {
@@ -242,6 +269,15 @@ async function main() {
     check("拖动中：left 变量没被实时改写（只有 transform 在动）",
       result.steps.midDrag.leftVar === result.steps.floated.floatX,
       { during: result.steps.midDrag.leftVar, before: result.steps.floated.floatX });
+    // 拖动全程不应出现长任务：sync 被冻结 + 只写 transform，主线程不该被卡住
+    result.steps.longTasks = await evalJs(`(() => {
+      if (window.__PO__) { try { window.__PO__.disconnect(); } catch (e) {} }
+      const t = window.__LONGTASKS__ || [];
+      return { count: t.length, max: t.length ? Math.max.apply(null, t) : 0, list: t };
+    })()`);
+    check("拖动中：主线程无长任务（未卡顿）",
+      result.steps.longTasks.count === 0 || result.steps.longTasks.max < 80,
+      result.steps.longTasks);
     await shot("shot-float-mid.png");
 
     await mouse("mouseReleased", gripPt.x + DX, gripPt.y + DY);
@@ -331,12 +367,20 @@ async function main() {
         region: box(window.__HARNESS__.regionBox()),
         navPosition: nav ? getComputedStyle(nav).position : null,
         stored: localStorage.getItem('dsh-sidebar-rail.float.v1'),
+        expandedAttr: root && root.getAttribute('data-dsh-rail-expanded'),
+        expandedStored: localStorage.getItem('dsh-sidebar-rail.railExpanded.v1'),
+        toggleLabel: (() => { const b = window.__HARNESS__.floatToggle(); return b && b.getAttribute('aria-label'); })(),
       };
     })()`);
     check("双击停靠：attr 被移除", result.steps.afterDock.attr === null, result.steps.afterDock.attr);
     check("双击停靠：抓手消失", result.steps.afterDock.grip === null, result.steps.afterDock.grip);
     check("双击停靠：nav 回到 absolute", result.steps.afterDock.navPosition === "absolute", result.steps.afterDock.navPosition);
     check("双击停靠：偏好落盘 on=false", /"on":false/.test(result.steps.afterDock.stored || ""), result.steps.afterDock.stored);
+    // 停靠回去要自动收起，否则停靠后的轨道比悬浮前更宽，等于「越用越挤」
+    check("双击停靠：功能区自动收起（属性置 0）", result.steps.afterDock.expandedAttr === "0", result.steps.afterDock.expandedAttr);
+    check("双击停靠：收起态已落盘", result.steps.afterDock.expandedStored === "0", result.steps.afterDock.expandedStored);
+    check("双击停靠：轨道回到 40px", result.steps.afterDock.nav !== null && result.steps.afterDock.nav.w === 40, result.steps.afterDock.nav);
+    check("双击停靠：按钮文案回到「悬浮」", result.steps.afterDock.toggleLabel === "悬浮并拖到任意位置", result.steps.afterDock.toggleLabel);
     check("双击停靠：几何回到停靠基线（±3px）",
       Math.abs(result.steps.afterDock.nav.x - dockedNav.x) <= 3 && Math.abs(result.steps.afterDock.nav.y - dockedNav.y) <= 3,
       { docked: dockedNav, afterDock: result.steps.afterDock.nav });
@@ -346,17 +390,20 @@ async function main() {
       { docked: dockedRegion, afterDock: result.steps.afterDock.region });
     await shot("shot-float-docked.png");
 
-    // -------------------------------------------- 展开态 + 悬浮（宽度要跟着变）
-    const expandPt = await evalJs(`(() => {
-      const b = document.querySelector('[data-dsh-rail-part="custom"] .dsr-toggle'); if (!b) return null;
-      const r = b.getBoundingClientRect();
-      return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+    // ---------------------- 从收起态再悬浮：必须自动展开（不需要手动点两次）
+    // 上一节停靠后已自动收起到 40px，这里直接点悬浮，验证「一次点击即展开」
+    const collapsedBeforeFloat = await evalJs(`(() => {
+      const root = window.__HARNESS__.root();
+      const nav = root.querySelector('[data-dsh-rail-part="nav"]');
+      return {
+        expanded: root.getAttribute('data-dsh-rail-expanded'),
+        navW: nav ? Math.round(nav.getBoundingClientRect().width) : null,
+      };
     })()`);
-    if (expandPt !== null) {
-      await mouse("mousePressed", expandPt.x, expandPt.y);
-      await mouse("mouseReleased", expandPt.x, expandPt.y);
-      await sleep(400);
-    }
+    check("停靠后处于收起态（40px）",
+      collapsedBeforeFloat.expanded === "0" && collapsedBeforeFloat.navW === 40,
+      collapsedBeforeFloat);
+
     const togglePt2 = await evalJs(`(() => {
       const b = window.__HARNESS__.floatToggle(); if (!b) return null;
       const r = b.getBoundingClientRect();
@@ -396,6 +443,32 @@ async function main() {
       Math.abs(result.steps.expandedFloat.grip.w - result.steps.expandedFloat.nav.w) <= 1,
       { grip: result.steps.expandedFloat.grip, nav: result.steps.expandedFloat.nav });
     await shot("shot-float-expanded.png");
+
+    // -------------------------- 悬浮态下也能手动收起（不该被自动展开锁死）
+    const collapsePt = await evalJs(`(() => {
+      const b = document.querySelector('[data-dsh-rail-part="custom"] .dsr-toggle'); if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+    })()`);
+    if (collapsePt !== null) {
+      await mouse("mousePressed", collapsePt.x, collapsePt.y);
+      await mouse("mouseReleased", collapsePt.x, collapsePt.y);
+      await sleep(400);
+    }
+    result.steps.floatedCollapsed = await evalJs(`(() => {
+      const root = window.__HARNESS__.root();
+      const nav = root.querySelector('[data-dsh-rail-part="nav"]');
+      return {
+        expanded: root.getAttribute('data-dsh-rail-expanded'),
+        navW: nav ? Math.round(nav.getBoundingClientRect().width) : null,
+        stillFloat: root.getAttribute('data-dsh-rail-float'),
+      };
+    })()`);
+    check("悬浮态可手动收起（不被自动展开锁死）",
+      result.steps.floatedCollapsed.expanded === "0" &&
+      result.steps.floatedCollapsed.navW === 40 &&
+      result.steps.floatedCollapsed.stillFloat === "1",
+      result.steps.floatedCollapsed);
 
     // --------------------------------- 视口缩小后必须被夹回可视范围（抓不住就废了）
     await c.send("Emulation.setDeviceMetricsOverride", { width: 520, height: 420, deviceScaleFactor: 1, mobile: false });
