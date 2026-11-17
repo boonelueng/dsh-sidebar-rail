@@ -8,10 +8,12 @@ probe-prompt-session-result.json
 probe-persist-result.json
 probe-final-result.json
 drag-probe-result.json
+float-probe-result.json
 verify-drag-result.json
 shot-*.png
 .probe-chrome-profile*/
 .probe-chrome-dragv/
+.probe-chrome-float/
 
 # 依赖
 node_modules/

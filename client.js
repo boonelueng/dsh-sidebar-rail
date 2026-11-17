@@ -28,6 +28,8 @@ window.__ModuleLoader__.load({
     const STORAGE_OFF = "dsh-sidebar-rail:off";
     const STORAGE_EXPANDED = "dsh-sidebar-rail.railExpanded.v1";
     const STORAGE_NAV_ORDER = "dsh-sidebar-rail.navOrder.v1";
+    const STORAGE_FLOAT = "dsh-sidebar-rail.float.v1";
+    const ATTR_FLOAT = "data-dsh-rail-float";
     const SETTINGS_SECTION = "settings.section";
     const SETTINGS_SECTION_ID = "dsh-sidebar-rail.settings";
     /** 轨道（功能区）宽度：收起为窄条，展开为带文字标签的宽条 */
@@ -74,6 +76,8 @@ window.__ModuleLoader__.load({
       entries: 0,
       hasInput: false,
       expanded: false,
+      floating: false,
+      floatPos: null,
       settingsSection: false,
       errors: [],
     };
@@ -312,9 +316,12 @@ window.__ModuleLoader__.load({
       }
       root.setAttribute("data-dsh-rail-expanded", railExpanded ? "1" : "0");
       root.style.setProperty("--dsr-rail-w", width + "px");
+      railWidthPx = width;
       diag.expanded = railExpanded;
       diag.railWidth = width;
       measureCustom();
+      // 悬浮态下变量是固定的参照系，宽度/位置要跟着一起刷新
+      if (floating) applyFloat(root);
     }
 
     function toggleRail() {
@@ -464,6 +471,52 @@ window.__ModuleLoader__.load({
       "border-top:.5px solid var(--dsw-alias-border-l3);font-size:13px}",
       '[data-dsh-rail-root][data-dsh-rail-expanded="1"] .dsr-toggle{width:100%;padding:0 10px}',
 
+      /* ---------------------------------------------------------------- 悬浮态
+       * 整条轨道脱离侧边栏，固定在视口任意位置。
+       * 注意选择器比基础 nav 规则多一个 [data-dsh-rail-float]，特异性更高，
+       * 否则打不过前面那条带 !important 的绝对定位规则。
+       */
+      '[data-dsh-rail-root][data-dsh-rail-float="1"] > [data-dsh-rail-part="nav"]{',
+      "position:fixed!important;left:var(--dsr-float-x,0px);",
+      "top:calc(var(--dsr-float-y,0px) + 22px);bottom:auto!important;",
+      "width:var(--dsr-float-w,40px)!important;height:auto!important;",
+      "max-height:calc(100vh - var(--dsr-float-y,0px) - 22px - 96px);",
+      "padding:4px 0!important;border:0!important;border-radius:0!important;",
+      "box-shadow:0 6px 24px rgba(0,0,0,.14),0 1px 3px rgba(0,0,0,.08);",
+      "z-index:2147482000;overflow-y:auto;will-change:transform;",
+      "}",
+      /* 自定义条目叠在面板图标下面；它自己的高度写完 --dsr-float-nav-h 后自动贴合 */
+      '[data-dsh-rail-root][data-dsh-rail-float="1"] > [data-dsh-rail-part="custom"]{',
+      "position:fixed!important;left:var(--dsr-float-x,0px);",
+      "top:calc(var(--dsr-float-y,0px) + 22px + var(--dsr-float-nav-h,0px));",
+      "bottom:auto!important;width:var(--dsr-float-w,40px)!important;max-height:none;",
+      "border:0!important;border-radius:0 0 var(--dsr-radius,12px) var(--dsr-radius,12px);",
+      "box-shadow:0 6px 24px rgba(0,0,0,.14);",
+      "z-index:2147482000;will-change:transform;",
+      "}",
+      /* 顶部抓取条：悬浮态才存在，是唯一能拖动整条轨道的把手 */
+      "[data-dsh-rail-grip]{",
+      "position:fixed;left:var(--dsr-float-x,0px);top:var(--dsr-float-y,0px);",
+      "width:var(--dsr-float-w,40px);height:22px;",
+      "display:flex;align-items:center;justify-content:center;",
+      "cursor:grab;touch-action:none;-webkit-user-drag:none;",
+      "user-select:none;font-size:11px;line-height:1;",
+      "color:var(--dsw-alias-label-secondary);",
+      "background:var(--dsw-specific-sidebar-fill);",
+      "border-radius:var(--dsr-radius,12px) var(--dsr-radius,12px) 0 0;",
+      "box-shadow:0 -2px 10px rgba(0,0,0,.05);",
+      "z-index:2147482001;will-change:transform;",
+      "}",
+      "[data-dsh-rail-grip]:hover{color:var(--dsw-alias-label-primary)}",
+      ".dsr-grip-dots{opacity:.55;letter-spacing:1px}",
+      "body.dsr-float-dragging,[data-dsh-rail-grip]:active{cursor:grabbing}",
+      "body.dsr-float-dragging{user-select:none}",
+      /* 悬浮后轨道已脱离文档流，会话区不再需要为它让出左侧空间 */
+      '[data-dsh-rail-root][data-dsh-rail-float="1"] > [data-dsh-rail-part="region"]{margin-left:0!important}',
+      '[data-dsh-rail-root][data-dsh-rail-float="1"] > [data-dsh-rail-part="logo"],',
+      '[data-dsh-rail-root][data-dsh-rail-float="1"] > [data-dsh-rail-part="new"],',
+      '[data-dsh-rail-root][data-dsh-rail-float="1"] > [data-dsh-rail-part="foot"]{margin-left:0!important}',
+
       /* 拖拽排序：只动合成层，避免触发布局重排 */
       '[data-dsh-rail-part="nav"],[data-dsh-rail-part="custom"]{touch-action:pan-y}',
       /* 按钮自己接管指针：否则触控竖拖会被浏览器当成滚动，拖拽永远起不来 */
@@ -592,7 +645,7 @@ window.__ModuleLoader__.load({
 
     function renderRail() {
       if (mountEl === null) return;
-      const sig = JSON.stringify([entries, railExpanded]);
+      const sig = JSON.stringify([entries, railExpanded, floating]);
       if (sig === railSig) return;
       railSig = sig;
       clear(mountEl);
@@ -618,7 +671,7 @@ window.__ModuleLoader__.load({
         );
       }
       // 展开/收起：固定在最底部（设置入口已移到 DSH 设置页，这里不再有齿轮）
-      mountEl.appendChild(
+      const toggleEl = mountEl.appendChild(
         el(
           "button",
           {
@@ -635,6 +688,29 @@ window.__ModuleLoader__.load({
           ]
         )
       );
+      // 悬浮开关：把整条轨道拎出侧边栏，放到视口任意位置（双击抓手可停靠回来）
+      const floatEl = mountEl.appendChild(
+        el(
+          "button",
+          {
+            type: "button",
+            className: "dsr-btn dsr-float-toggle",
+            title: floating ? "停靠回侧边栏" : "悬浮并拖到任意位置",
+            "aria-label": floating ? "停靠回侧边栏" : "悬浮并拖到任意位置",
+            "aria-pressed": floating ? "true" : "false",
+            onClick: toggleFloat,
+          },
+          [
+            el("span", { className: "dsr-btn-ico", text: floating ? "◱" : "⧉" }, null),
+            el("span", { className: "dsr-btn-label", text: floating ? "停靠" : "悬浮" }, null),
+          ]
+        )
+      );
+      // 工具按钮不参与排序，但也必须有显式 order：
+      // 条目写着 0/1/2…，而工具按钮若留空（默认 0）就会插到条目中间，
+      // 拖拽时看着「顺序没变」。给它们一个远大于条目数的档位，永久钉在末尾。
+      toggleEl.style.order = "9000";
+      floatEl.style.order = "9001";
       measureCustom();
     }
 
@@ -646,6 +722,8 @@ window.__ModuleLoader__.load({
       const height = Math.ceil(mountEl.getBoundingClientRect().height);
       root.style.setProperty("--dsr-custom-h", (height + 4) + "px");
       measureRailBounds(root);
+      // 悬浮态下自定义条目是独立固定层，高度变了要重新贴合
+      if (floating) applyFloat(root);
     }
 
     /**
@@ -765,11 +843,20 @@ window.__ModuleLoader__.load({
         });
       }
       return Array.from(container.querySelectorAll(".dsr-btn")).filter(function (btn) {
-        return !btn.classList.contains("dsr-toggle");
+        return !btn.classList.contains("dsr-toggle") && !btn.classList.contains("dsr-float-toggle");
       });
     }
 
+    /**
+     * 记录「排序前」的位置。
+     *
+     * 必须先 cancel 掉还在跑的 FLIP：上一帧的动画会把 rect 顶偏，
+     * 拿被顶偏的值当基准算出来的 dx/dy 是错的，连续快拖时画面会跳。
+     */
     function capturePositions(nodes) {
+      for (const node of nodes) node.getAnimations().forEach(function (a) {
+        a.cancel();
+      });
       const map = new Map();
       for (const node of nodes) map.set(node, node.getBoundingClientRect());
       return map;
@@ -959,6 +1046,7 @@ window.__ModuleLoader__.load({
       const item = event.target.closest("button");
       if (item === null || !container.contains(item)) return;
       if (item.classList.contains("dsr-toggle")) return;
+      if (item.classList.contains("dsr-float-toggle")) return;
       if (container === navEl && isMoreButton(item)) return;
       pendingDrag = {
         container: container,
@@ -1477,6 +1565,286 @@ window.__ModuleLoader__.load({
       renderEditor();
     }
 
+    // ------------------------------------------------------------ floating rail
+    /**
+     * 悬浮轨道：整条竖轨脱离侧边栏，固定在视口任意位置。
+     *
+     * 流畅性做法：
+     *  - 拖动过程中**只写 transform: translate3d()**，不碰 left/top，
+     *    全程合成层变换，不触发任何布局；指针事件用 rAF 合帧，一帧最多算一次。
+     *  - 松手后才把位移折算进 --dsr-float-x/y 变量并落盘，此时才有一次布局。
+     *  - 用 setPointerCapture 而不是 window 监听：指针移出视口也不会丢事件，
+     *    且不会像 window 监听那样在每个 mousemove 上跑一遍冒泡。
+     */
+    let floating = false;
+    let floatX = 12;
+    let floatY = 120;
+    let gripEl = null;
+    let floatRoot = null;
+    let floatDrag = null;
+    let floatRaf = 0;
+    let floatPending = null;
+    /** 轨道宽度（px），由 applyRailState 维护，悬浮态直接复用 */
+    let railWidthPx = RAIL_W;
+
+    function loadFloat() {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_FLOAT);
+        const v = raw === null ? null : JSON.parse(raw);
+        if (v !== null && typeof v === "object") {
+          floating = v.on === true;
+          if (Number.isFinite(v.x)) floatX = v.x;
+          if (Number.isFinite(v.y)) floatY = v.y;
+        }
+      } catch (err) {
+        floating = false;
+      }
+    }
+
+    function saveFloat() {
+      try {
+        window.localStorage.setItem(STORAGE_FLOAT, JSON.stringify({ on: floating, x: Math.round(floatX), y: Math.round(floatY) }));
+      } catch (err) {
+        diag.errors.push("float-save: " + String(err));
+      }
+    }
+
+    /** 悬浮总高度：抓取条 + 面板轨道 + 自定义条目 */
+    function floatHeight() {
+      if (floatRoot === null) return 0;
+      let h = 22;
+      const nav = floatRoot.querySelector('[' + ATTR_PART + '="nav"]');
+      const custom = floatRoot.querySelector('[' + ATTR_PART + '="custom"]');
+      if (nav !== null) h += Math.round(nav.getBoundingClientRect().height);
+      if (custom !== null) h += Math.round(custom.getBoundingClientRect().height);
+      return h;
+    }
+
+    /** 把坐标夹进视口，四周留 8px 呼吸，避免贴边后抓不住 */
+    function clampFloat(x, y) {
+      const w = railWidthPx;
+      const vw = window.innerWidth || 0;
+      const vh = window.innerHeight || 0;
+      const h = floatHeight() || 200;
+      const maxX = Math.max(8, vw - w - 8);
+      const maxY = Math.max(8, vh - h - 8);
+      return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
+    }
+
+    /** 把位置落到 root 上的 CSS 变量；这是唯一会触发布局的地方 */
+    function applyFloat(root) {
+      if (root === null || root === undefined) return;
+      if (!floating) {
+        root.removeAttribute(ATTR_FLOAT);
+        root.style.removeProperty("--dsr-float-x");
+        root.style.removeProperty("--dsr-float-y");
+        root.style.removeProperty("--dsr-float-w");
+        root.style.removeProperty("--dsr-float-nav-h");
+        diag.floating = false;
+        removeGrip();
+        return;
+      }
+      root.setAttribute(ATTR_FLOAT, "1");
+      floatRoot = root;
+      const pos = clampFloat(floatX, floatY);
+      floatX = pos.x;
+      floatY = pos.y;
+      root.style.setProperty("--dsr-float-x", Math.round(floatX) + "px");
+      root.style.setProperty("--dsr-float-y", Math.round(floatY) + "px");
+      root.style.setProperty("--dsr-float-w", railWidthPx + "px");
+      const nav = root.querySelector('[' + ATTR_PART + '="nav"]');
+      const navH = nav === null ? 0 : Math.round(nav.getBoundingClientRect().height);
+      root.style.setProperty("--dsr-float-nav-h", navH + "px");
+      ensureGrip(root);
+      diag.floating = true;
+      diag.floatPos = { x: Math.round(floatX), y: Math.round(floatY), w: railWidthPx, navH: navH };
+    }
+
+    function toggleFloat() {
+      floating = !floating;
+      saveFloat();
+      const root = document.querySelector("[" + ATTR_ROOT + "]");
+      if (floating && floatX === 12 && floatY === 120) {
+        // 首次悬浮：默认丢到视口右侧空白处。
+        // 不能贴着侧边栏右侧放——悬浮后会话区的左边距被释放了，
+        // 贴着放会正好压住会话标题，等于「浮起来反而更差」。
+        const vw = window.innerWidth || 0;
+        const vh = window.innerHeight || 0;
+        floatX = Math.max(8, vw - railWidthPx - 24);
+        floatY = Math.max(24, Math.round(vh * 0.18));
+      }
+      applyFloat(root);
+      // 按钮的图标/文案/aria 都随 floating 变，必须重渲染一次轨道
+      renderRail();
+      scheduleReport();
+    }
+
+    // ------------------------------------------------------------- grip handle
+    function ensureGrip(root) {
+      if (gripEl !== null && gripEl.isConnected) {
+        gripEl.style.setProperty("--dsr-float-x", Math.round(floatX) + "px");
+        gripEl.style.setProperty("--dsr-float-y", Math.round(floatY) + "px");
+        gripEl.style.setProperty("--dsr-float-w", railWidthPx + "px");
+        return;
+      }
+      removeGrip();
+      gripEl = el(
+        "div",
+        {
+          "data-dsh-rail-grip": "1",
+          title: "拖动可把功能条放到任意位置 · 双击停靠回侧边栏",
+          role: "button",
+          tabindex: "0",
+          "aria-label": "拖动手柄：把功能条放到任意位置，双击停靠回侧边栏",
+        },
+        [el("span", { className: "dsr-grip-dots", text: "⋮⋮" }, null)]
+      );
+      gripEl.style.setProperty("--dsr-float-x", Math.round(floatX) + "px");
+      gripEl.style.setProperty("--dsr-float-y", Math.round(floatY) + "px");
+      gripEl.style.setProperty("--dsr-float-w", railWidthPx + "px");
+      gripEl.addEventListener("pointerdown", onGripPointerDown);
+      gripEl.addEventListener("dblclick", function () {
+        floating = false;
+        saveFloat();
+        applyFloat(document.querySelector("[" + ATTR_ROOT + "]"));
+        renderRail();
+        scheduleReport();
+      });
+      gripEl.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          floating = false;
+          saveFloat();
+          applyFloat(document.querySelector("[" + ATTR_ROOT + "]"));
+          renderRail();
+          scheduleReport();
+        }
+      });
+      document.body.appendChild(gripEl);
+      void root;
+    }
+
+    function removeGrip() {
+      if (gripEl !== null) {
+        gripEl.remove();
+        gripEl = null;
+      }
+      floatRoot = null;
+    }
+
+    /** 拖动中把位移写到三个悬浮层的 transform 上（不触发布局） */
+    function paintFloatDelta(dx, dy) {
+      const t = "translate3d(" + dx + "px," + dy + "px,0)";
+      if (gripEl !== null) gripEl.style.transform = t;
+      if (floatRoot !== null) {
+        const nav = floatRoot.querySelector('[' + ATTR_PART + '="nav"]');
+        const custom = floatRoot.querySelector('[' + ATTR_PART + '="custom"]');
+        if (nav !== null) nav.style.transform = t;
+        if (custom !== null) custom.style.transform = t;
+      }
+    }
+
+    function flushFloatFrame() {
+      floatRaf = 0;
+      const pending = floatPending;
+      if (pending === null || floatDrag === null) return;
+      floatPending = null;
+      paintFloatDelta(pending.dx, pending.dy);
+    }
+
+    function onGripPointerDown(event) {
+      if (event.button !== 0) return;
+      if (gripEl === null) return;
+      event.preventDefault();
+      const startX = floatX;
+      const startY = floatY;
+      floatDrag = { x0: event.clientX, y0: event.clientY, sx: startX, sy: startY, active: false, dx: 0, dy: 0 };
+      try {
+        gripEl.setPointerCapture(event.pointerId);
+      } catch (err) {
+        /* 某些环境不支持指针捕获，退回普通监听 */
+      }
+      gripEl.addEventListener("pointermove", onGripPointerMove);
+      gripEl.addEventListener("pointerup", onGripPointerUp);
+      gripEl.addEventListener("pointercancel", onGripPointerUp);
+    }
+
+    function onGripPointerMove(event) {
+      if (floatDrag === null) return;
+      const dx = event.clientX - floatDrag.x0;
+      const dy = event.clientY - floatDrag.y0;
+      if (!floatDrag.active) {
+        if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+        floatDrag.active = true;
+        if (document.body) document.body.classList.add("dsr-float-dragging");
+      }
+      event.preventDefault();
+      floatDrag.dx = dx;
+      floatDrag.dy = dy;
+      floatPending = { dx: dx, dy: dy };
+      if (floatRaf === 0) floatRaf = window.requestAnimationFrame(flushFloatFrame);
+    }
+
+    function onGripPointerUp(event) {
+      if (gripEl !== null) {
+        gripEl.removeEventListener("pointermove", onGripPointerMove);
+        gripEl.removeEventListener("pointerup", onGripPointerUp);
+        gripEl.removeEventListener("pointercancel", onGripPointerUp);
+        try {
+          gripEl.releasePointerCapture(event.pointerId);
+        } catch (err) {
+          /* 忽略 */
+        }
+      }
+      if (floatRaf !== 0) {
+        window.cancelAnimationFrame(floatRaf);
+        floatRaf = 0;
+      }
+      floatPending = null;
+      const d = floatDrag;
+      floatDrag = null;
+      if (d === null) return;
+      paintFloatDelta(0, 0);
+      if (!d.active) return;
+      if (document.body) document.body.classList.remove("dsr-float-dragging");
+      floatX = d.sx + d.dx;
+      floatY = d.sy + d.dy;
+      // 先落位（applyFloat 内部会把坐标夹进视口并写回 floatX/floatY），再存盘。
+      // 反过来的话会把视口外的坐标写进 localStorage，下次刷新还原到一个抓不到的位置。
+      applyFloat(floatRootGood());
+      saveFloat();
+      scheduleReport();
+    }
+
+    function floatRootGood() {
+      if (floatRoot !== null && floatRoot.isConnected) return floatRoot;
+      return document.querySelector("[" + ATTR_ROOT + "]");
+    }
+
+    /** 窗口尺寸变化后重新夹一次，避免悬浮条跑到屏幕外 */
+    function reclampFloat() {
+      if (!floating) return;
+      const root = floatRootGood();
+      if (root === null) return;
+      applyFloat(root);
+    }
+
+    function cancelFloatDrag() {
+      if (floatRaf !== 0) {
+        window.cancelAnimationFrame(floatRaf);
+        floatRaf = 0;
+      }
+      floatPending = null;
+      if (gripEl !== null) {
+        gripEl.removeEventListener("pointermove", onGripPointerMove);
+        gripEl.removeEventListener("pointerup", onGripPointerUp);
+        gripEl.removeEventListener("pointercancel", onGripPointerUp);
+      }
+      floatDrag = null;
+      paintFloatDelta(0, 0);
+      if (document.body) document.body.classList.remove("dsr-float-dragging");
+    }
+
     // ---------------------------------------------------------- anchor engine
     let observer = null;
     let rafId = 0;
@@ -1503,7 +1871,16 @@ window.__ModuleLoader__.load({
       mountEl = null;
       navEl = null;
       railSig = "";
+      // 悬浮层的把手与拖拽残留一并撤掉（floating 这个偏好本身保留，下次锚点回来还能复现）
+      cancelFloatDrag();
+      removeGrip();
+      if (floating) {
+        document.querySelectorAll('[' + ATTR_FLOAT + ']').forEach(function (node) {
+          node.removeAttribute(ATTR_FLOAT);
+        });
+      }
       diag.tagged = false;
+      diag.floating = false;
     }
 
     function tagLabels(nav) {
@@ -1602,6 +1979,8 @@ window.__ModuleLoader__.load({
         ensureMount(root);
         applyRailState(root);
         measureCustom();
+        // 悬浮态要在几何量完之后落位：轨道高度由上面两步才确定
+        applyFloat(root);
         diag.tagged = true;
 
         // 采集几何，供宿主侧 last-report.json 判断「是否真的并列」
@@ -1670,6 +2049,8 @@ window.__ModuleLoader__.load({
       if (node === null) return false;
       if (mountEl !== null && (node === mountEl || mountEl.contains(node))) return true;
       if (editorHost !== null && (node === editorHost || editorHost.contains(node))) return true;
+      // 抓取条挂在 body 上，插入/移除会触发 observer；不认作自己的节点就会自激循环
+      if (gripEl !== null && (node === gripEl || gripEl.contains(node))) return true;
       return false;
     }
 
@@ -1692,6 +2073,8 @@ window.__ModuleLoader__.load({
 
       // 窗口尺寸或侧边栏宽度变化后重新量取几何
       resizeHandler = function () {
+        // 悬浮条先夹一次：窗口缩小后它可能已跑到视口外，抓不住就再也拖不回来
+        reclampFloat();
         schedule();
       };
       window.addEventListener("resize", resizeHandler);
@@ -1765,6 +2148,8 @@ window.__ModuleLoader__.load({
       // 面板图标顺序必须在第一次 sync 之前读进来，否则刷新后 applyNavOrder
       // 拿到空数组，会按 DOM 原始顺序重排，看起来像「顺序没保存」。
       loadNavOrder();
+      // 悬浮偏好同理：要先于首次 sync 载入，否则会先按停靠态渲染再跳一次
+      loadFloat();
       resetDraft();
       stylesDispose = installStyles();
 

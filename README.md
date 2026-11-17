@@ -19,7 +19,7 @@
 │    │                          │
 │ ✎  │                          │
 │ ◈  │                          │
-│ »  │                          │  ← 底部：自定义条目 + 展开/收起按钮
+│ »  │                          │  ← 底部：自定义条目 + 展开/收起 + 悬浮/停靠
 ├────┴──────────────────────────┤
 │  设置 · 底部动作              │  ← footArea（跨两栏）
 └───────────────────────────────┘
@@ -31,6 +31,7 @@
 2. 一条细分隔线
 3. 你自定义的条目
 4. 展开 / 收起按钮
+5. 悬浮 / 停靠按钮
 
 ## 展开 / 收起功能区
 
@@ -53,6 +54,23 @@
   - 自定义条目 → 直接重排 `dsh-sidebar-rail.custom.v1` 里的条目数组
 - 「更多」菜单按钮固定在最后，不参与排序
 - 展开态下拖拽同样可用，浮层会跟着轨道宽度变化并显示文字标签
+
+## 悬浮到任意位置
+
+竖轨最底部的 **⧉（悬浮）/ ◱（停靠）** 按钮可以把整条轨道从侧边栏里拎出来，变成一块**浮在页面上的面板**，随便拖到 DSH 里任何位置：
+
+- 点 **⧉ 悬浮**：轨道脱离侧边栏，浮到视口右侧的空白处，会话列表立刻收回被占用的宽度（不再给轨道让位）
+- 拖动轨道顶部的**抓手**（`⋮⋮` 那一条）就能移动，松手位置会记住
+- 拖到边缘会自动夹在视口内，缩窗口也不会跑丢
+- 双击抓手、或按 Enter / Space，等于再点一次 **◱ 停靠**，回到侧边栏原位
+- 状态存在 `localStorage` 的 `dsh-sidebar-rail.float.v1`（记 `{on, x, y}`），刷新后保持
+- 展开态下悬浮同样可用，浮层宽度跟着轨道宽度走
+
+流畅性做法：
+
+- 拖动过程中**只写 `translate3d`**（抓手 + 图标层 + 自定义条目层），绝不改 `left` / `top`，因此不触发布局重排
+- 指针事件用 `setPointerCapture` + `requestAnimationFrame` 合帧，一帧最多算一次位置，掉帧时不会堆积
+- 松手后才把最终坐标落盘并夹取，避免把视口外的坐标存进去
 
 ## 自定义条目
 
@@ -97,12 +115,14 @@ localStorage.removeItem('dsh-sidebar-rail:off')
 ```js
 { loaded, version, tagged, disabled,
   anchors: { root, nav, region, logo, foot, newButton },
-  custom, entries, hasInput, expanded, settingsSection, errors }
+  custom, entries, hasInput, expanded, floating, floatPos,
+  settingsSection, errors }
 ```
 
 - `tagged: true` 表示已成功接管布局
 - `disabled: 'collapsed' | 'switch' | null` 表示当前为什么没接管
 - `anchors` 里哪一项是 `false`，就是那个锚点没找到
+- `floating` / `floatPos` 是当前悬浮态与落位坐标
 - `errors` 里是运行期异常
 
 ## 安装
@@ -147,6 +167,12 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/probe-persist.cjs` | 保存后落 `localStorage`、刷新后仍在、「更多」菜单可打开 |
 | `probes/probe-panel2.cjs` | 设置页能否打开、「侧边栏条目」一节能否进入、`.dsr-settings-host` 是否有内容 |
 | `probes/probe-final.cjs` | 端到端回归：齿轮已消失、展开/收起、设置页里增 / 删 / 保存写回轨道、刷新后保持 |
+| `probes/drag-probe.cjs` | 拖拽排序：ghost / 半透明占位 / FLIP / `order` 变更 / 落盘 / 刷新还原 / 自定义条目重排 / 点击抑制 |
+| `probes/float-probe.cjs` | 悬浮：进出悬浮态、抓手出现、`translate3d` 拖动、坐标夹取与落盘、刷新还原、双击停靠、展开态宽度跟随、缩窗口不跑丢 |
+
+`drag-probe.cjs` 与 `float-probe.cjs` 自带静态回归台 `probes/drag-harness.html`（复刻 DSH 侧边栏 DOM 骨架 + 加载真实 `client.js`），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
+
+另有 `verify-drag.cjs`：在 Node `vm` 里用带布局模型的 DOM 桩加载 `client.js`，跑 24 项断言，纯逻辑层秒级回归，无需浏览器。
 
 用法：`node probes/probe.cjs "<带令牌的页面地址>"`。
 
@@ -172,6 +198,7 @@ DSH 的槽渲染器给每个槽套一层 `<div data-slot="<槽名>" style="displ
 
 - 侧边栏宽度仍受 DSH 自身 264–420px 限制（本插件不改这个上限）。窗口很窄时会比较挤，此时可以收起侧边栏用原生形态。
 - 折叠态（56px）下不接管，保持原生图标条。
+- 悬浮态是**浮层**，不参与 DSH 布局：它会盖在页面内容上面。默认落在视口右侧空白处，若你想让它出现在别处，拖过去即可。
 - 依赖 `[data-slot="sidebar.workspaces"]` 等锚点；DSH 若大改侧边栏结构，`__DSH_RAIL__.anchors` 会指出哪一项失效，此时插件自动退回原生布局而不会破坏界面。
 
 ## 许可

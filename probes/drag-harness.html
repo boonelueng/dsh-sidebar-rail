@@ -124,10 +124,19 @@
       },
       visualEntryOrder: function () {
         return Array.from(document.querySelectorAll('[data-dsh-rail-part="custom"] .dsr-btn'))
-          .filter(function (b) { return !b.classList.contains("dsr-toggle"); })
+          .filter(function (b) {
+            return !b.classList.contains("dsr-toggle") && !b.classList.contains("dsr-float-toggle");
+          })
           .sort(function (a, b) { return a.getBoundingClientRect().top - b.getBoundingClientRect().top; })
           .map(function (b) { return b.getAttribute("aria-label"); });
-      }
+      },
+      floatToggle: function () {
+        return document.querySelector('[data-dsh-rail-part="custom"] .dsr-float-toggle');
+      },
+      grip: function () { return document.querySelector('[data-dsh-rail-grip]'); },
+      root: function () { return document.querySelector('[data-dsh-rail-root]'); },
+      navBox: function () { return document.querySelector('[data-dsh-rail-part="nav"]'); },
+      regionBox: function () { return document.querySelector('[data-dsh-rail-part="region"]'); }
     };
   })();
 </script>

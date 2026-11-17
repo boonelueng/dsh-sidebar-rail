@@ -547,7 +547,7 @@ async function tick(ms) {
   const customMount = root.querySelector('[data-dsh-rail-part="custom"]');
   check("custom 挂载点存在", customMount !== null);
   const entries = customMount ? Array.from(customMount.querySelectorAll(".dsr-btn")) : [];
-  check("自定义条目渲染 2 条 + 展开按钮", entries.length === 3, entries.map((e) => e.getAttribute("aria-label")));
+  check("自定义条目渲染 2 条 + 展开/悬浮按钮", entries.length === 4, entries.map((e) => e.getAttribute("aria-label")));
 
   // 视觉顺序（按 order + 布局模型）
   const visualNav = () =>
@@ -607,7 +607,9 @@ async function tick(ms) {
   check("被拖图标本身不做 FLIP", navButtons[0].animations.length === 0);
 
   // --------------------------------------------- 自定义条目拖拽 + 持久化
-  const btns = Array.from(customMount.querySelectorAll(".dsr-btn")).filter((b) => !b.classList.contains("dsr-toggle"));
+  const btns = Array.from(customMount.querySelectorAll(".dsr-btn")).filter(
+    (b) => !b.classList.contains("dsr-toggle") && !b.classList.contains("dsr-float-toggle")
+  );
   const beforeEntry = btns.map((b) => b.getAttribute("data-dsr-entry-id"));
   const e0 = btns[0].getBoundingClientRect();
   const ey = Math.round(e0.top + e0.height / 2);
@@ -635,7 +637,7 @@ async function tick(ms) {
 
   // -------------------------------------------------- 点击抑制（不误触发）
   let entryClicks = 0;
-  const firstEntry = customMount.querySelector(".dsr-btn:not(.dsr-toggle)");
+  const firstEntry = customMount.querySelector(".dsr-btn:not(.dsr-toggle):not(.dsr-float-toggle)");
   if (firstEntry) {
     firstEntry.addEventListener("click", () => {
       entryClicks += 1;
