@@ -467,7 +467,7 @@ sandbox.self = sandbox.window;
 const ctx = vm.createContext(sandbox);
 vm.runInContext(SRC, ctx, { filename: "client.js" });
 // 三个可选 chunk 与内核同处一个沙箱：DSH 里它们是独立 bundle，但共享同一个 __ModuleLoader__
-for (const chunkFile of ["client.drag.js", "client.float.js", "client.settings.js"]) {
+for (const chunkFile of ["client.drag.js", "client.float.js", "client.settings.js", "client.window.js"]) {
   const chunkPath = path.join(__dirname, chunkFile);
   if (!fs.existsSync(chunkPath)) continue;
   const chunkSrc = fs.readFileSync(chunkPath, "utf8");

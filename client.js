@@ -94,7 +94,7 @@ window.__ModuleLoader__.load({
      * 运行期出错，都只让那一项功能消失，并列布局与其余模块照常工作。
      * 每个模块在 install(api) 里拿到下面这个最小接口，不直接碰内核闭包。
      */
-    const modules = { drag: null, float: null, settings: null };
+    const modules = { drag: null, float: null, settings: null, window: null };
     /** 模块级故障记录（去重后进 diag.errors，方便宿主侧报告里定位） */
     const moduleFaults = [];
     /** 轨道宽度（px）：内核维护，悬浮模块通过 api.railWidth() 只读 */
@@ -214,6 +214,7 @@ window.__ModuleLoader__.load({
         { key: "drag", file: "./client.drag.js" },
         { key: "float", file: "./client.float.js" },
         { key: "settings", file: "./client.settings.js" },
+        { key: "window", file: "./client.window.js" },
       ];
       for (const spec of specs) {
         try {

@@ -109,6 +109,25 @@
 
 数据存在 `localStorage` 的 `dsh-sidebar-rail.custom.v1`，只在本地，不上传。
 
+## 设置窗口化
+
+DSH 自带的设置弹窗是一块居中的固定面板，盖在遮罩上，只能点遮罩或按 Esc 关掉。这个模块把它变成**可自由摆放的窗口**：
+
+- **拖动**：按住标题栏（顶部 54px 区域，右侧给按钮留出的位置除外）拖动，移到任意位置；松手落盘，下次打开还在原位
+- **红绿灯**：窗口**右上角**三个 12px 圆点，按 macOS 顺序从左到右
+
+  | 按钮 | 颜色 | 行为 |
+  | --- | --- | --- |
+  | 关闭 | 🔴 `#ff5f57` | 直接隐藏（等同官方关闭，走官方 `onClose`） |
+  | 最小化 | 🟡 `#febc2e` | 收成一条 240px 的标题栏，再点一下还原 |
+  | 最大化 | 🟢 `#28c840` | 在「铺满会话区」与「原尺寸」之间切换 |
+
+- **最大化 = 铺满会话区**：左边界取左侧栏右缘（也就是竖轨和会话区让位之后的位置），右、上、下各留 8px；不会盖住左侧竖轨
+- 位置与状态存在 `localStorage` 的 `dsh-sidebar-rail.win.v1`
+- 拖动只写合成层 `transform`（`translate3d`）+ `requestAnimationFrame` 合帧，不触发布局重排；松手才写 `left / top`
+
+与官方布局的关系：模块不依赖任何哈希类名，只按 `grid-area` 认出「标题栏」和「关闭按钮区」，改写内联样式且**只写自己的属性**（`data-dsh-rail-win*`），关窗时原样撤掉，官方弹窗组件本身不动。找不到标题栏就整体退出，保持官方原样。
+
 ## 开关与诊断
 
 临时关掉全部改动（只留诊断）：
@@ -189,7 +208,7 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 
 另有 `verify-drag.cjs`：在 Node `vm` 里用带布局模型的 DOM 桩加载 `client.js`，跑 24 项断言，纯逻辑层秒级回归，无需浏览器。
 
-`verify-modules.cjs` 专门验证**模块隔离**：在同一个 DOM 桩里逐个制造六种故障（chunk 404、factory 抛错、导出缺 `install`、`install` 抛错、三个模块同时挂掉、装好后运行期抛错），断言并列布局仍成立、其余模块仍在位、`diag.errors` 里有可定位的一条。这是「某个模块坏了不影响整体」这条承诺的可执行证明，改模块边界后应当先跑它：
+`verify-modules.cjs` 专门验证**模块隔离**：在同一个 DOM 桩里逐个制造七种故障（chunk 404、factory 抛错、导出缺 `install`、`install` 抛错、四个模块同时挂掉、装好后运行期抛错、window chunk 拿不到），断言并列布局仍成立、其余模块仍在位、`diag.errors` 里有可定位的一条。这是「某个模块坏了不影响整体」这条承诺的可执行证明，改模块边界后应当先跑它：
 
 ```bash
 node verify-modules.cjs
@@ -206,9 +225,9 @@ node verify-modules.cjs
 
 ## 实现原理
 
-### 模块结构：内核 + 三个可选模块
+### 模块结构：内核 + 四个可选模块
 
-插件拆成一个内核和三个独立 chunk，靠 DSH 的 `client-modules` 按需加载：
+插件拆成一个内核和四个独立 chunk，靠 DSH 的 `client-modules` 按需加载：
 
 | 文件 | 职责 | 缺席时的表现 |
 | --- | --- | --- |
@@ -216,6 +235,7 @@ node verify-modules.cjs
 | `client.drag.js` | 轨道图标与自定义条目的鼠标拖拽排序（FLIP） | 面板图标退回原生顺序，仍可点击 |
 | `client.float.js` | 竖轨整体悬浮、拖动、双击停靠、自动展开/收起 | 轨道上不出现「悬浮」按钮，其余照常 |
 | `client.settings.js` | 条目编辑（DSH 设置页一节 + 内联弹层 + 导入导出） | 设置页里那一节空白，条目仍按默认两条渲染 |
+| `client.window.js` | 设置弹窗窗口化：拖拽移动、红绿灯（关闭 / 最小化 / 最大化） | 设置弹窗退回官方原样 |
 
 模块之间**不互相 import**，只认内核给的一份最小接口（`moduleApi`）。内核装配模块时逐个 `try/catch`：某个 chunk 404、factory 抛错、`install()` 抛错，都只把该模块置空并往 `diag.errors` 写一条 `module <key>: <reason>`，其余模块与布局完全不受影响。
 

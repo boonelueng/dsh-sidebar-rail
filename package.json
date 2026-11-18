@@ -16,6 +16,7 @@
     "client.drag.js",
     "client.float.js",
     "client.settings.js",
+    "client.window.js",
     "index.mjs",
     "cordis.patch.yml",
     "README.md",

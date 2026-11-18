@@ -21,6 +21,7 @@ const CHUNKS = {
   "client.drag.js": fs.readFileSync(path.join(ROOT, "client.drag.js"), "utf8"),
   "client.float.js": fs.readFileSync(path.join(ROOT, "client.float.js"), "utf8"),
   "client.settings.js": fs.readFileSync(path.join(ROOT, "client.settings.js"), "utf8"),
+  "client.window.js": fs.readFileSync(path.join(ROOT, "client.window.js"), "utf8"),
 };
 
 let failures = 0;
@@ -654,15 +655,22 @@ async function runRuntimeFaultCase() {
     { float: false, drag: true, faulted: 1 }
   );
 
-  console.log("\n-- 故障 5：三个模块同时挂掉（最坏情况） --");
+  console.log("\n-- 故障 5：四个模块同时挂掉（最坏情况） --");
   await runCase(
     "all-down",
-    { failLoad: ["client.drag.js", "client.float.js", "client.settings.js"] },
-    { float: false, drag: false, faulted: 3 }
+    { failLoad: ["client.drag.js", "client.float.js", "client.settings.js", "client.window.js"] },
+    { float: false, drag: false, faulted: 4 }
   );
 
   console.log("\n-- 故障 6：模块装好后在运行期抛错 --");
   await runRuntimeFaultCase();
+
+  console.log("\n-- 故障 7：window 模块 chunk 拿不到（404） --");
+  await runCase(
+    "window-404",
+    { failLoad: ["client.window.js"] },
+    { float: true, drag: true, faulted: 1 }
+  );
 
   console.log("");
   if (failures === 0) {
