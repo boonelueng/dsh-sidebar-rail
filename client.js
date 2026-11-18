@@ -1323,6 +1323,16 @@ window.__ModuleLoader__.load({
       // 模块是异步拉的，装配完成后自己会重放一次渲染与调度；
       // 这里 await 一下只为让诊断报告在第一帧就带上「哪些模块活着」。
       modulesReady.then(function () {
+        // 诊断里显式列出每个模块的装配结果：排查「装了但没生效」时
+        // 一眼就能看出是模块没装上、还是装上了不工作。
+        if (diag !== null && typeof diag === "object") {
+          diag.modulesLoaded = {
+            drag: modules.drag !== null,
+            float: modules.float !== null,
+            settings: modules.settings !== null,
+            window: modules.window !== null,
+          };
+        }
         schedule();
         scheduleReport();
       });

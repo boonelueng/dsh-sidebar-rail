@@ -428,6 +428,9 @@ window.__ModuleLoader__.load({
           y: box === null ? null : box.y,
           w: box === null ? naturalWidth : box.w,
           h: box === null ? naturalHeight : box.h,
+          open: true,
+          // 接管成功时为空串；否则写清卡在哪一步（no-grid / error:...）
+          reason: lastAdoptNote,
         };
       }
     }
@@ -647,6 +650,14 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 接管失败的现场快照，写进 diag.window.reason —— 用户一眼能看出卡在哪一步：
+     *   no-panel        页面里根本没有 [data-shortcut-modal="settings"]
+     *   no-grid         有面板，但没找到 grid-area 以 title 结尾的标题区
+     *   error:<detail>  上面某一步抛了异常（例如样式系统还没就绪）
+     */
+    let lastAdoptNote = "";
+
+    /**
      * 真正的接管入口。先解掉上一轮（可能已被宿主重新挂载过），再重新定位。
      * 任何一步找不到就整体放弃，保持官方样子。
      */
@@ -678,6 +689,7 @@ window.__ModuleLoader__.load({
       }
       if (titleEl === null) {
         // 找不到标题区就放弃接管——没有标题栏的窗口拖不动，留着只会让用户困惑
+        lastAdoptNote = "no-grid";
         cleanupPanel();
         return;
       }
@@ -723,12 +735,23 @@ window.__ModuleLoader__.load({
       const panel = document.querySelector(PANEL_SEL);
       if (panel === null) {
         if (panelEl !== null) cleanupPanel();
-        if (diag !== null) diag.window = { mode: mode, minimized: minimized === true, open: false };
+        lastAdoptNote = "no-panel";
+        if (diag !== null) diag.window = { mode: mode, minimized: minimized === true, open: false, reason: lastAdoptNote };
         return;
       }
       if (panel !== panelEl || !panel.isConnected) {
-        adopt(panel);
-        if (panelEl === null) return;
+        try {
+          adopt(panel);
+        } catch (err) {
+          // 任何异常都不能让模块整体哑掉：记进 diag，保持官方弹窗原样
+          lastAdoptNote = "error:" + String(err && err.message ? err.message : err);
+          if (api !== null && typeof api.pushError === "function") api.pushError("window: adopt 失败 " + String(err && err.message ? err.message : err));
+        }
+        if (panelEl === null) {
+          if (diag !== null) diag.window = { mode: mode, minimized: minimized === true, open: true, reason: lastAdoptNote };
+          return;
+        }
+        lastAdoptNote = "";
       }
       stealAutofocusFocus();
       // 位置与尺寸可能被官方重新写回过（React 重渲染），这里对齐一次
