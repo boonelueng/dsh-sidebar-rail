@@ -119,6 +119,9 @@ async function main() {
       result.errors.push("harness not ready: " + (await evalJs("document.title")));
       throw new Error("harness not ready");
     }
+    // 三个功能已拆成独立 chunk，由内核异步装配；等它们全部就位再开始断言，
+    // 否则会量到一个「还没有悬浮按钮」的中间态。
+    result.modulesReady = await evalJs("window.__HARNESS__.modulesReady()");
     await sleep(600);
 
     result.steps.boot = await evalJs(`(() => ({

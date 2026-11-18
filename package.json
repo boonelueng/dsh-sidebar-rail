@@ -13,6 +13,9 @@
   },
   "files": [
     "client.js",
+    "client.drag.js",
+    "client.float.js",
+    "client.settings.js",
     "index.mjs",
     "cordis.patch.yml",
     "README.md",

@@ -189,6 +189,12 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 
 另有 `verify-drag.cjs`：在 Node `vm` 里用带布局模型的 DOM 桩加载 `client.js`，跑 24 项断言，纯逻辑层秒级回归，无需浏览器。
 
+`verify-modules.cjs` 专门验证**模块隔离**：在同一个 DOM 桩里逐个制造六种故障（chunk 404、factory 抛错、导出缺 `install`、`install` 抛错、三个模块同时挂掉、装好后运行期抛错），断言并列布局仍成立、其余模块仍在位、`diag.errors` 里有可定位的一条。这是「某个模块坏了不影响整体」这条承诺的可执行证明，改模块边界后应当先跑它：
+
+```bash
+node verify-modules.cjs
+```
+
 用法：`node probes/probe.cjs "<带令牌的页面地址>"`。
 
 这些探针需要一个带启动令牌的地址。默认情况下宿主侧 `index.mjs` **什么都不做**；只有以 `DSH_SIDEBAR_RAIL_DEV=1` 启动 DSH 时，它才会：
@@ -199,6 +205,23 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 这两项都是本地调试脚手架，且第 1 项会把访问凭据落盘，所以默认关闭——正常使用时不需要它们。
 
 ## 实现原理
+
+### 模块结构：内核 + 三个可选模块
+
+插件拆成一个内核和三个独立 chunk，靠 DSH 的 `client-modules` 按需加载：
+
+| 文件 | 职责 | 缺席时的表现 |
+| --- | --- | --- |
+| `client.js` | 内核：锚点识别、并列布局、条目渲染、诊断回传、错误边界 | —（它必须活着，否则插件不启动） |
+| `client.drag.js` | 轨道图标与自定义条目的鼠标拖拽排序（FLIP） | 面板图标退回原生顺序，仍可点击 |
+| `client.float.js` | 竖轨整体悬浮、拖动、双击停靠、自动展开/收起 | 轨道上不出现「悬浮」按钮，其余照常 |
+| `client.settings.js` | 条目编辑（DSH 设置页一节 + 内联弹层 + 导入导出） | 设置页里那一节空白，条目仍按默认两条渲染 |
+
+模块之间**不互相 import**，只认内核给的一份最小接口（`moduleApi`）。内核装配模块时逐个 `try/catch`：某个 chunk 404、factory 抛错、`install()` 抛错，都只把该模块置空并往 `diag.errors` 写一条 `module <key>: <reason>`，其余模块与布局完全不受影响。
+
+运行期同理：所有跨模块调用都走 `callModule(key, fnName, args, fallback)`——模块缺席返回兜底值，抛错则记一次故障并**把该模块永久摘掉**，之后都走兜底。这样「某一个模块出问题」不会冒泡成整个侧边栏的故障。要单独修某个功能，只需改对应的那一个 chunk；要加功能，就再加一个 chunk 并在 `loadModules()` 的 `specs` 里登记。
+
+### 布局
 
 DSH 的槽渲染器给每个槽套一层 `<div data-slot="<槽名>" style="display:contents">`。`display:contents` 让这层包装盒不参与布局，因此它是**纯寻址面**——一个不依赖构建哈希类名的稳定钩子。
 

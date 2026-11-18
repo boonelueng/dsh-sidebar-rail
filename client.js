@@ -83,6 +83,158 @@ window.__ModuleLoader__.load({
     };
     window.__DSH_RAIL__ = diag;
 
+    // ------------------------------------------------------------- module host
+    /**
+     * 可选模块表。三个功能各自是一个独立 chunk：
+     *   drag     —— 轨道图标拖拽排序
+     *   float    —— 整条竖轨悬浮到视口任意位置
+     *   settings —— 条目编辑（DSH 设置页 + 内联弹层）
+     *
+     * 设计原则：**内核不依赖任何模块**。模块加载失败、install 抛错、
+     * 运行期出错，都只让那一项功能消失，并列布局与其余模块照常工作。
+     * 每个模块在 install(api) 里拿到下面这个最小接口，不直接碰内核闭包。
+     */
+    const modules = { drag: null, float: null, settings: null };
+    /** 模块级故障记录（去重后进 diag.errors，方便宿主侧报告里定位） */
+    const moduleFaults = [];
+    /** 轨道宽度（px）：内核维护，悬浮模块通过 api.railWidth() 只读 */
+    let railWidthPx = RAIL_W;
+    /** 悬浮态缓存：模块缺席时恒为 false，渲染层据此隐藏悬浮按钮 */
+    let floatOn = false;
+
+    function pushError(message) {
+      diag.errors.push(String(message));
+    }
+
+    /** 只在该变量确实变化时才写：无谓的 setProperty 会让整棵子树重算样式 */
+    function setVar(node, name, value) {
+      if (node.style.getPropertyValue(name) === value) return false;
+      node.style.setProperty(name, value);
+      return true;
+    }
+
+    /** 记录一次模块故障；同一模块只记第一次，避免刷屏 */
+    function faultModule(key, err) {
+      const text = String(err && err.message !== undefined ? err.message : err);
+      if (moduleFaults.indexOf(key + ": " + text) < 0) {
+        moduleFaults.push(key + ": " + text);
+        diag.errors.push("module " + key + ": " + text);
+      }
+    }
+
+    /**
+     * 调一个模块的导出函数。
+     * 模块不在 → 静默返回兜底值；模块抛错 → 记一次故障并把它摘掉（之后都走兜底）。
+     * 这样「某一模块坏掉」不会向上冒泡成整个 side rail 的故障。
+     */
+    function callModule(key, fnName, args, fallback) {
+      const mod = modules[key];
+      if (mod === null || typeof mod[fnName] !== "function") return fallback;
+      try {
+        return mod[fnName].apply(mod, args || []);
+      } catch (err) {
+        faultModule(key, err);
+        modules[key] = null;
+        return fallback;
+      }
+    }
+
+    /** 悬浮态：模块在就问它，模块缺席一律视为停靠 */
+    function floatState() {
+      if (modules.float === null) return false;
+      const on = callModule("float", "isOn", [], false);
+      floatOn = on === true;
+      return floatOn;
+    }
+
+    /** 内核给模块的最小接口（模块只认这份契约，不碰内核闭包） */
+    const moduleApi = {
+      diag: diag,
+      ATTR_ROOT: ATTR_ROOT,
+      ATTR_NAV: ATTR_NAV,
+      ATTR_PART: ATTR_PART,
+      ATTR_HIDE: ATTR_HIDE,
+      ATTR_FLOAT: ATTR_FLOAT,
+      STORAGE_CUSTOM: STORAGE_CUSTOM,
+      STORAGE_EXPANDED: STORAGE_EXPANDED,
+      STORAGE_NAV_ORDER: STORAGE_NAV_ORDER,
+      STORAGE_FLOAT: STORAGE_FLOAT,
+      ACTION_TYPES: ACTION_TYPES,
+      DEFAULT_ENTRIES: DEFAULT_ENTRIES,
+      RAIL_W: RAIL_W,
+      RAIL_W_EXPANDED: RAIL_W_EXPANDED,
+      el: el,
+      clear: clear,
+      clone: clone,
+      sanitizeEntry: sanitizeEntry,
+      actionSummary: actionSummary,
+      getReact: getReact,
+      saveEntries: saveEntries,
+      getEntries: function () {
+        return entries;
+      },
+      pushError: pushError,
+      schedule: schedule,
+      scheduleReport: scheduleReport,
+      renderRail: renderRail,
+      applyRailState: applyRailState,
+      setRailExpanded: setRailExpanded,
+      isRailExpanded: function () {
+        return railExpanded === true;
+      },
+      railWidth: function () {
+        return railWidthPx;
+      },
+      setVar: setVar,
+    };
+
+    /** 展开/收起：归内核管，模块只能通过这个口子请求（悬浮时自动展开就靠它） */
+    function setRailExpanded(next) {
+      const want = next === true;
+      if (railExpanded === want) return;
+      railExpanded = want;
+      saveRailExpanded();
+      const root = document.querySelector("[" + ATTR_ROOT + "]");
+      if (root !== null) applyRailState(root);
+      railSig = "";
+      renderRail();
+    }
+
+    /**
+     * 按需装配三个可选模块。
+     *
+     * 每个模块单独 try/catch：任一模块加载失败（404、语法错、install 抛错）
+     * 都只是把 modules[key] 留空，其余模块与内核照常工作。
+     * 模块自己通过 require.async 相对路径加载——DSH 的 client-modules
+     * 会把 ./client.X.js 解析成同目录下的独立 chunk。
+     */
+    async function loadModules() {
+      const specs = [
+        { key: "drag", file: "./client.drag.js" },
+        { key: "float", file: "./client.float.js" },
+        { key: "settings", file: "./client.settings.js" },
+      ];
+      for (const spec of specs) {
+        try {
+          if (typeof require.async !== "function") {
+            throw new Error("require.async 不可用，本宿主不支持可选模块");
+          }
+          const mod = await require.async(spec.file);
+          if (mod === null || typeof mod !== "object") throw new Error("模块没有导出对象");
+          if (typeof mod.install !== "function") throw new Error("模块缺少 install()");
+          mod.install(moduleApi);
+          modules[spec.key] = mod;
+        } catch (err) {
+          modules[spec.key] = null;
+          faultModule(spec.key, err);
+        }
+      }
+      // 模块装好后重放一次：让悬浮按钮出现在轨道上、把记忆里的顺序/落位落下来
+      railSig = "";
+      renderRail();
+      schedule();
+    }
+
     /**
      * 把当前诊断回传给宿主（index.mjs 的 /dsh-sidebar-rail/report 路由），
      * 宿主写到本插件目录的 last-report.json —— 排查时不需要用户手动开控制台。
@@ -326,8 +478,9 @@ window.__ModuleLoader__.load({
       diag.expanded = railExpanded;
       diag.railWidth = width;
       if (widthChanged) measureCustom();
-      // 悬浮态下变量是固定的参照系，宽度/位置要跟着一起刷新
-      if (floating) applyFloat(root);
+      // 悬浮态下变量是固定的参照系，宽度/位置要跟着一起刷新。
+      // refresh 在停靠态是空操作，模块缺席也安全。
+      if (floatState()) callModule("float", "refresh", [root], null);
     }
 
     function toggleRail() {
@@ -666,7 +819,9 @@ window.__ModuleLoader__.load({
 
     function renderRail() {
       if (mountEl === null) return;
-      const sig = JSON.stringify([entries, railExpanded, floating]);
+      const isFloat = floatState();
+      const sig = JSON.stringify([entries, railExpanded, isFloat]);
+
       if (sig === railSig) return;
       railSig = sig;
       clear(mountEl);
@@ -710,28 +865,36 @@ window.__ModuleLoader__.load({
         )
       );
       // 悬浮开关：把整条轨道拎出侧边栏，放到视口任意位置（双击抓手可停靠回来）
-      const floatEl = mountEl.appendChild(
-        el(
-          "button",
-          {
-            type: "button",
-            className: "dsr-btn dsr-float-toggle",
-            title: floating ? "停靠回侧边栏" : "悬浮并拖到任意位置",
-            "aria-label": floating ? "停靠回侧边栏" : "悬浮并拖到任意位置",
-            "aria-pressed": floating ? "true" : "false",
-            onClick: toggleFloat,
-          },
-          [
-            el("span", { className: "dsr-btn-ico", text: floating ? "◱" : "⧉" }, null),
-            el("span", { className: "dsr-btn-label", text: floating ? "停靠" : "悬浮" }, null),
-          ]
-        )
-      );
+      // 悬浮模块缺席时整颗按钮不渲染——模块坏掉不该留下一个点了没反应的按钮。
+      let floatEl = null;
+      if (modules.float !== null) {
+        floatEl = mountEl.appendChild(
+          el(
+            "button",
+            {
+              type: "button",
+              className: "dsr-btn dsr-float-toggle",
+              title: isFloat ? "停靠回侧边栏" : "悬浮并拖到任意位置",
+              "aria-label": isFloat ? "停靠回侧边栏" : "悬浮并拖到任意位置",
+              "aria-pressed": isFloat ? "true" : "false",
+              onClick: function () {
+                callModule("float", "toggle", [], null);
+                railSig = "";
+                renderRail();
+              },
+            },
+            [
+              el("span", { className: "dsr-btn-ico", text: isFloat ? "◱" : "⧉" }, null),
+              el("span", { className: "dsr-btn-label", text: isFloat ? "停靠" : "悬浮" }, null),
+            ]
+          )
+        );
+      }
       // 工具按钮不参与排序，但也必须有显式 order：
       // 条目写着 0/1/2…，而工具按钮若留空（默认 0）就会插到条目中间，
       // 拖拽时看着「顺序没变」。给它们一个远大于条目数的档位，永久钉在末尾。
       toggleEl.style.order = "9000";
-      floatEl.style.order = "9001";
+      if (floatEl !== null) floatEl.style.order = "9001";
       measureCustom();
     }
 
@@ -744,7 +907,7 @@ window.__ModuleLoader__.load({
       setVar(root, "--dsr-custom-h", (height + 4) + "px");
       measureRailBounds(root);
       // 悬浮态下自定义条目是独立固定层，高度变了要重新贴合
-      if (floating) applyFloat(root);
+      if (floatState()) callModule("float", "refresh", [root], null);
     }
 
     /**
@@ -783,1242 +946,14 @@ window.__ModuleLoader__.load({
       railSig = "";
       mountEl = el("div", { "data-dsh-rail-part": "custom", "data-dsh-rail-mount": "true" }, null);
       root.appendChild(mountEl);
-      attachDrag(mountEl);
+      // 自定义条目容器也支持拖拽排序；拖拽模块缺席时这一行就是空操作
+      callModule("drag", "attachContainer", [mountEl], null);
       renderRail();
       diag.custom = true;
     }
 
-    // ------------------------------------------------------------ drag reorder
-    /**
-     * 轨道图标拖拽排序。
-     *
-     * 分两个容器各自维护顺序：面板图标在 <nav> 里、自定义条目在挂载点里。
-     * 用 CSS `order` 改变排列（不动 DOM 结构），配合 Web Animations 做 FLIP，
-     * 这样拖拽过程中每一帧都是合成层变换，不会触发重排，滚动和拖拽都能保持流畅。
-     *
-     * 顺序：
-     *  - 面板图标按 aria-label 记住（DSH 没有暴露 panel id 到 DOM，「更多」按钮固定最后）
-     *  - 自定义条目按 entries 数组顺序
-     */
-    let navEl = null;
-    let navOrder = [];
-    let pendingDrag = null;
-    let activeDrag = null;
 
-    const DRAG_THRESHOLD = 4;
 
-    function navKeyOf(btn) {
-      return String(btn.getAttribute("aria-label") || "").trim();
-    }
-
-    /** 「更多」是菜单按钮，永远排在最后，不参与排序 */
-    function isMoreButton(btn) {
-      if (btn.getAttribute("aria-haspopup") === "menu") return true;
-      return btn.getAttribute("aria-expanded") !== null;
-    }
-
-    function loadNavOrder() {
-      try {
-        const raw = window.localStorage.getItem(STORAGE_NAV_ORDER);
-        const parsed = raw === null ? [] : JSON.parse(raw);
-        navOrder = Array.isArray(parsed) ? parsed.map(String) : [];
-      } catch (err) {
-        navOrder = [];
-      }
-    }
-
-    function saveNavOrder() {
-      try {
-        window.localStorage.setItem(STORAGE_NAV_ORDER, JSON.stringify(navOrder));
-      } catch (err) {
-        diag.errors.push("nav-order-save: " + String(err));
-      }
-    }
-
-    /** 把记忆里的顺序落到 nav 的按钮上；没记录过的排在已记录项之后 */
-    function applyNavOrder(nav) {
-      if (nav === null) return;
-      // 拖拽期间不能重放：ghost 挂到 body 会触发 observer → sync，
-      // 此时若把 order 覆盖回已保存的顺序，拖动中的预览会被瞬间打回。
-      if (activeDrag !== null) return;
-      const rank = new Map();
-      for (let i = 0; i < navOrder.length; i += 1) rank.set(navOrder[i], i);
-      const buttons = Array.from(nav.querySelectorAll(":scope > button"));
-      let tail = navOrder.length;
-      for (const btn of buttons) {
-        if (isMoreButton(btn)) {
-          btn.style.order = "9999";
-          continue;
-        }
-        const key = navKeyOf(btn);
-        if (key.length === 0) continue;
-        const idx = rank.has(key) ? rank.get(key) : tail++;
-        btn.style.order = String(idx);
-      }
-    }
-
-    function railItemsOf(container) {
-      if (container === navEl) {
-        return Array.from(container.querySelectorAll(":scope > button")).filter(function (btn) {
-          return !isMoreButton(btn);
-        });
-      }
-      return Array.from(container.querySelectorAll(".dsr-btn")).filter(function (btn) {
-        return !btn.classList.contains("dsr-toggle") && !btn.classList.contains("dsr-float-toggle");
-      });
-    }
-
-    /**
-     * 记录「排序前」的位置。
-     *
-     * 必须先 cancel 掉还在跑的 FLIP：上一帧的动画会把 rect 顶偏，
-     * 拿被顶偏的值当基准算出来的 dx/dy 是错的，连续快拖时画面会跳。
-     */
-    function capturePositions(nodes) {
-      for (const node of nodes) node.getAnimations().forEach(function (a) {
-        a.cancel();
-      });
-      const map = new Map();
-      for (const node of nodes) map.set(node, node.getBoundingClientRect());
-      return map;
-    }
-
-    /** FLIP：把「排序前 → 排序后」的位移用动画补回去，形成连续的滑动感 */
-    function playFlip(nodes, before, duration) {
-      const ms = duration || 170;
-      for (const node of nodes) {
-        const b = before.get(node);
-        if (b === undefined) continue;
-        const a = node.getBoundingClientRect();
-        const dx = b.left - a.left;
-        const dy = b.top - a.top;
-        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
-        if (typeof node.animate !== "function") continue;
-        if (typeof node.getAnimations === "function") {
-          node.getAnimations().forEach(function (anim) {
-            anim.cancel();
-          });
-        }
-        node.animate(
-          [{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "translate(0px,0px)" }],
-          { duration: ms, easing: "cubic-bezier(.2,0,0,1)" }
-        );
-      }
-    }
-
-    function computeDropIndex(items, dragged, pointerY) {
-      let idx = 0;
-      for (const item of items) {
-        if (item === dragged) continue;
-        const r = item.getBoundingClientRect();
-        if (pointerY > r.top + r.height / 2) idx += 1;
-      }
-      return idx;
-    }
-
-    /** 拖动时实时重排：先算插入位，再改 order，最后用 FLIP 把位移补成动画 */
-    function reorderDuringDrag(state, pointerY) {
-      const items = railItemsOf(state.container);
-      const current = items.map(function (n) {
-        return n;
-      });
-      const rest = current.filter(function (n) {
-        return n !== state.item;
-      });
-      const idx = computeDropIndex(rest, state.item, pointerY);
-      const next = rest.slice(0, idx).concat([state.item], rest.slice(idx));
-      const before = capturePositions(current);
-      for (let i = 0; i < next.length; i += 1) next[i].style.order = String(i);
-      // 被拖起的那一项不参与 FLIP：它由跟随指针的 ghost 代表，原件只需留在原位当占位
-      const animating = current.filter(function (n) {
-        return n !== state.item;
-      });
-      playFlip(animating, before, 170);
-      state.previewKeys = next.map(function (n) {
-        return state.kind === "nav" ? navKeyOf(n) : n.getAttribute("data-dsr-entry-id") || "";
-      });
-    }
-
-    function startDrag(state, pointerY) {
-      state.item.classList.add("dsr-dragging");
-      const r = state.item.getBoundingClientRect();
-      const ghost = state.item.cloneNode(true);
-      // cloneNode 会把原件刚加上的 .dsr-dragging 一起复制过来，
-      // 导致跟随指针的 ghost 被压到 0.32 透明（看着像消失了），这里必须摘掉。
-      ghost.classList.remove("dsr-dragging");
-      ghost.classList.add("dsr-ghost");
-      if (railExpanded) ghost.classList.add("dsr-ghost-wide");
-      ghost.removeAttribute("data-dsr-entry-id");
-      ghost.style.cssText =
-        "position:fixed;left:" + r.left + "px;top:" + r.top + "px;width:" + r.width + "px;height:" + r.height +
-        "px;pointer-events:none;z-index:2147483000;margin:0;";
-      document.body.appendChild(ghost);
-      state.ghost = ghost;
-      state.grabOffset = pointerY - r.top;
-      state.active = true;
-      if (document.body) document.body.classList.add("dsr-dragging-active");
-      reorderDuringDrag(state, pointerY);
-    }
-
-    function moveDrag(state, pointerY) {
-      if (state.ghost !== null) {
-        const h = state.ghost.getBoundingClientRect().height;
-        state.ghost.style.top = pointerY - (state.grabOffset || h / 2) + "px";
-      }
-      reorderDuringDrag(state, pointerY);
-    }
-
-    /** 拖拽结束后：面板图标写 navOrder，自定义条目重排 entries 并保存 */
-    function endDrag(state, commit) {
-      if (state.ghost !== null) {
-        state.ghost.remove();
-        state.ghost = null;
-      }
-      state.item.classList.remove("dsr-dragging");
-      if (document.body) document.body.classList.remove("dsr-dragging-active");
-
-      if (commit !== false) {
-        const keys = state.previewKeys || [];
-        if (state.kind === "nav") {
-          if (keys.length > 0) {
-            navOrder = keys;
-            saveNavOrder();
-          }
-          if (navEl !== null) applyNavOrder(navEl);
-        } else {
-          const byId = new Map();
-          for (const e of entries) byId.set(e.id, e);
-          const next = [];
-          for (const id of keys) {
-            const found = byId.get(id);
-            if (found !== undefined) {
-              next.push(found);
-              byId.delete(id);
-            }
-          }
-          for (const leftover of byId.values()) next.push(leftover);
-          if (next.length === entries.length) saveEntries(next);
-        }
-      }
-      // 清掉拖拽期间的临时 order 之外的痕迹，并重新校准顺序
-      if (state.kind === "nav" && navEl !== null) applyNavOrder(navEl);
-    }
-
-    function suppressNextClick() {
-      const stop = function (event) {
-        event.stopPropagation();
-        event.preventDefault();
-        window.removeEventListener("click", stop, true);
-      };
-      window.addEventListener("click", stop, true);
-      window.setTimeout(function () {
-        window.removeEventListener("click", stop, true);
-      }, 400);
-    }
-
-    function onDragPointerMove(event) {
-      if (pendingDrag === null) return;
-      if (activeDrag === null) {
-        const dy = Math.abs(event.clientY - pendingDrag.y0);
-        const dx = Math.abs(event.clientX - pendingDrag.x0);
-        if (dy < DRAG_THRESHOLD && dx < DRAG_THRESHOLD) return;
-        activeDrag = pendingDrag;
-        startDrag(activeDrag, event.clientY);
-      }
-      if (activeDrag !== null) {
-        event.preventDefault();
-        moveDrag(activeDrag, event.clientY);
-      }
-    }
-
-    function onDragPointerUp() {
-      window.removeEventListener("pointermove", onDragPointerMove, true);
-      window.removeEventListener("pointerup", onDragPointerUp, true);
-      window.removeEventListener("pointercancel", onDragPointerUp, true);
-      const state = activeDrag;
-      pendingDrag = null;
-      activeDrag = null;
-      if (state !== null) {
-        endDrag(state, true);
-        suppressNextClick();
-      }
-    }
-
-    /** 插件卸载/退回原生布局时把拖拽残留全部清掉 */
-    function cancelDrag() {
-      window.removeEventListener("pointermove", onDragPointerMove, true);
-      window.removeEventListener("pointerup", onDragPointerUp, true);
-      window.removeEventListener("pointercancel", onDragPointerUp, true);
-      if (activeDrag !== null) {
-        endDrag(activeDrag, false);
-      }
-      pendingDrag = null;
-      activeDrag = null;
-      if (document.body) document.body.classList.remove("dsr-dragging-active");
-      document.querySelectorAll(".dsr-ghost").forEach(function (node) {
-        node.remove();
-      });
-      navEl = null;
-    }
-
-    function onRailPointerDown(event) {
-      if (event.button !== 0) return;
-      const container = event.currentTarget;
-      const item = event.target.closest("button");
-      if (item === null || !container.contains(item)) return;
-      if (item.classList.contains("dsr-toggle")) return;
-      if (item.classList.contains("dsr-float-toggle")) return;
-      if (container === navEl && isMoreButton(item)) return;
-      pendingDrag = {
-        container: container,
-        kind: container === navEl ? "nav" : "entry",
-        item: item,
-        x0: event.clientX,
-        y0: event.clientY,
-        ghost: null,
-        previewKeys: null,
-        active: false,
-      };
-      window.addEventListener("pointermove", onDragPointerMove, true);
-      window.addEventListener("pointerup", onDragPointerUp, true);
-      window.addEventListener("pointercancel", onDragPointerUp, true);
-    }
-
-    function attachDrag(container) {
-      if (container === null || container === undefined) return;
-      if (container.dataset.dsrDragBound === "1") return;
-      container.dataset.dsrDragBound = "1";
-      container.addEventListener("pointerdown", onRailPointerDown);
-    }
-
-    // ---------------------------------------------------------------- editor
-    let editorHost = null;
-    let editDraft = [];
-    let editIndex = null;
-    let editShowImport = false;
-    let editImportText = "";
-    let editNote = "";
-
-    function openEditor() {
-      if (editorHost !== null) return;
-      editDraft = clone(entries);
-      editIndex = null;
-      editShowImport = false;
-      editImportText = "";
-      editNote = "";
-      editorHost = el("div", { className: "dsr-mask" }, null);
-      editorHost.addEventListener("mousedown", function (event) {
-        if (event.target === editorHost) closeEditor();
-      });
-      document.body.appendChild(editorHost);
-      document.addEventListener("keydown", onEditorKeydown, true);
-      renderEditor();
-    }
-
-    function closeEditor() {
-      document.removeEventListener("keydown", onEditorKeydown, true);
-      if (editorHost !== null) {
-        editorHost.remove();
-        editorHost = null;
-      }
-    }
-
-    function onEditorKeydown(event) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        closeEditor();
-      }
-    }
-
-    function commitEditor() {
-      saveEntries(clone(editDraft));
-      if (editorHost !== null) {
-        closeEditor();
-        return;
-      }
-      resetDraft();
-      editNote = "已保存";
-      renderSettingsPanel();
-    }
-
-    function renderEditor() {
-      if (editorHost === null) {
-        // 设置页内联编辑器接管渲染（齿轮已移出侧边栏，modal 仅作兜底）
-        renderSettingsPanel();
-        return;
-      }
-      const card = el("div", { className: "dsr-card", role: "dialog", "aria-label": "自定义侧边栏条目" }, null);
-
-      card.appendChild(
-        el("div", { className: "dsr-head" }, [
-          el("span", { className: "dsr-title", text: editIndex === null ? "侧边栏条目" : "编辑条目" }, null),
-          el(
-            "span",
-            {
-              className: "dsr-sub",
-              text: editIndex === null ? editDraft.length + " 条 · 保存后写入本机" : "图标决定它在轨道上的样子",
-            },
-            null
-          ),
-        ])
-      );
-
-      const body = el("div", { className: "dsr-body" }, null);
-      if (editIndex === null) body.appendChild(listView());
-      else body.appendChild(formView());
-      card.appendChild(body);
-      card.appendChild(footView());
-
-      clear(editorHost);
-      editorHost.appendChild(card);
-    }
-
-    // ------------------------------------------------- settings section (inline)
-    /** DSH 设置页里的宿主节点（由 SettingsSection 的 ref 回调挂上） */
-    let settingsHost = null;
-
-    function resetDraft() {
-      editDraft = clone(entries);
-      editIndex = null;
-      editShowImport = false;
-      editImportText = "";
-      editNote = "";
-    }
-
-    function cancelEdit() {
-      if (editorHost !== null) {
-        closeEditor();
-        return;
-      }
-      if (settingsHost !== null) {
-        resetDraft();
-        editNote = "已放弃修改";
-        renderSettingsPanel();
-      }
-    }
-
-    function renderSettingsPanel() {
-      if (settingsHost === null) return;
-      clear(settingsHost);
-      const wrap = el("div", { className: "dsr-settings" }, null);
-      wrap.appendChild(
-        el("div", { className: "dsr-field" }, [
-          el("div", { className: "dsr-name", text: editIndex === null ? "侧边栏条目" : "编辑条目" }, null),
-          el(
-            "div",
-            {
-              className: "dsr-desc",
-              text:
-                editIndex === null
-                  ? editDraft.length + " 条 · 显示在左侧功能区底部，保存在本机"
-                  : "图标决定它在功能区上的样子",
-            },
-            null
-          ),
-        ])
-      );
-      const body = el("div", { className: "dsr-body" }, null);
-      body.appendChild(editIndex === null ? listView() : formView());
-      wrap.appendChild(body);
-      wrap.appendChild(footView());
-      settingsHost.appendChild(wrap);
-    }
-
-    // 交给 DSH 设置页渲染的一节；内容用原生 DOM 挂到 ref 节点里，避免依赖 react-dom 版本差异
-    function SettingsSection() {
-      const R = getReact();
-      if (R === null) return null;
-      return R.createElement("div", {
-        className: "dsr-settings-host",
-        ref: function (node) {
-          if (node === null || node === undefined) {
-            settingsHost = null;
-            return;
-          }
-          settingsHost = node;
-          resetDraft();
-          renderSettingsPanel();
-        },
-      });
-    }
-
-    function listView() {
-      const frag = document.createDocumentFragment();
-      if (editDraft.length === 0) {
-        frag.appendChild(el("div", { className: "dsr-empty", text: "还没有条目。点下面「添加条目」开始。" }, null));
-      }
-      editDraft.forEach(function (entry, index) {
-        const row = el("div", { className: "dsr-row" }, [
-          el("span", { className: "dsr-ico", text: entry.icon }, null),
-          el("span", { className: "dsr-meta" }, [
-            el("div", { className: "dsr-name", text: entry.label }, null),
-            el("div", { className: "dsr-desc", text: actionSummary(entry.action) }, null),
-          ]),
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              title: "上移",
-              text: "↑",
-              disabled: index === 0,
-              onClick: function () {
-                moveEntry(index, -1);
-              },
-            },
-            null
-          ),
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              title: "下移",
-              text: "↓",
-              disabled: index === editDraft.length - 1,
-              onClick: function () {
-                moveEntry(index, 1);
-              },
-            },
-            null
-          ),
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              text: "编辑",
-              onClick: function () {
-                editIndex = index;
-                renderEditor();
-              },
-            },
-            null
-          ),
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              text: "删除",
-              onClick: function () {
-                editDraft.splice(index, 1);
-                renderEditor();
-              },
-            },
-            null
-          ),
-        ]);
-        frag.appendChild(row);
-      });
-
-      if (editShowImport) {
-        frag.appendChild(
-          el("div", { className: "dsr-field" }, [
-            el("span", { className: "dsr-label", text: "粘贴 JSON（数组，或 { entries: [...] }）" }, null),
-            el("textarea", {
-              className: "dsr-area",
-              placeholder: '[{ "icon": "★", "label": "名称", "action": { "type": "prompt", "text": "…" } }]',
-              value: editImportText,
-              onInput: function (event) {
-                editImportText = event.target.value;
-              },
-            }),
-            el(
-              "button",
-              {
-                type: "button",
-                className: "dsr-mini",
-                text: "导入",
-                onClick: doImport,
-              },
-              null
-            ),
-          ])
-        );
-      }
-      return frag;
-    }
-
-    function moveEntry(index, delta) {
-      const target = index + delta;
-      if (target < 0 || target >= editDraft.length) return;
-      const tmp = editDraft[index];
-      editDraft[index] = editDraft[target];
-      editDraft[target] = tmp;
-      renderEditor();
-    }
-
-    function doImport() {
-      try {
-        const parsed = JSON.parse(editImportText);
-        const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed && parsed.entries) ? parsed.entries : null;
-        if (list === null) {
-          editNote = "格式不对：需要数组或 { entries: [...] }";
-          renderEditor();
-          return;
-        }
-        editDraft = list.map(sanitizeEntry).filter(Boolean);
-        editShowImport = false;
-        editImportText = "";
-        editNote = "已导入 " + editDraft.length + " 条，记得点保存";
-      } catch (err) {
-        editNote = "JSON 解析失败";
-      }
-      renderEditor();
-    }
-
-    function formView() {
-      const entry = editDraft[editIndex];
-      if (entry === undefined) {
-        editIndex = null;
-        return listView();
-      }
-      const frag = document.createDocumentFragment();
-
-      frag.appendChild(
-        el("div", { className: "dsr-field" }, [
-          el("span", { className: "dsr-label", text: "图标（1–2 个字符，建议 emoji 或符号）" }, null),
-          el("input", {
-            className: "dsr-input",
-            value: entry.icon,
-            onInput: function (event) {
-              entry.icon = Array.from(event.target.value).slice(0, 2).join("");
-            },
-          }),
-        ])
-      );
-
-      frag.appendChild(
-        el("div", { className: "dsr-field" }, [
-          el("span", { className: "dsr-label", text: "名称（悬停提示）" }, null),
-          el("input", {
-            className: "dsr-input",
-            value: entry.label,
-            onInput: function (event) {
-              entry.label = event.target.value;
-            },
-          }),
-        ])
-      );
-
-      const typeSelect = el(
-        "select",
-        {
-          className: "dsr-select",
-          onChange: function (event) {
-            entry.action = { type: event.target.value };
-            renderEditor();
-          },
-        },
-        ACTION_TYPES.map(function (option) {
-          return el("option", { value: option.value, text: option.label }, null);
-        })
-      );
-      typeSelect.value = entry.action.type;
-      frag.appendChild(el("div", { className: "dsr-field" }, [el("span", { className: "dsr-label", text: "动作" }, null), typeSelect]));
-
-      if (entry.action.type === "prompt" || entry.action.type === "session") {
-        frag.appendChild(
-          el("div", { className: "dsr-field" }, [
-            el(
-              "span",
-              {
-                className: "dsr-label",
-                text: entry.action.type === "prompt" ? "提示词（填入当前输入框，不自动发送）" : "提示词（新会话发送）",
-              },
-              null
-            ),
-            el("textarea", {
-              className: "dsr-area",
-              value: entry.action.text || "",
-              onInput: function (event) {
-                entry.action.text = event.target.value;
-              },
-            }),
-          ])
-        );
-      }
-
-      if (entry.action.type === "panel") {
-        frag.appendChild(
-          el("div", { className: "dsr-field" }, [
-            el("span", { className: "dsr-label", text: "面板 id（如 plugins、schedule）" }, null),
-            el("input", {
-              className: "dsr-input",
-              value: entry.action.id || "",
-              onInput: function (event) {
-                entry.action.id = event.target.value;
-              },
-            }),
-          ])
-        );
-      }
-
-      if (entry.action.type === "url") {
-        frag.appendChild(
-          el("div", { className: "dsr-field" }, [
-            el("span", { className: "dsr-label", text: "链接（https://…）" }, null),
-            el("input", {
-              className: "dsr-input",
-              value: entry.action.url || "",
-              onInput: function (event) {
-                entry.action.url = event.target.value;
-              },
-            }),
-          ])
-        );
-      }
-
-      return frag;
-    }
-
-    function footView() {
-      const foot = el("div", { className: "dsr-foot" }, null);
-
-      if (editIndex === null) {
-        foot.appendChild(
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              text: "添加条目",
-              onClick: function () {
-                editDraft.push({ id: "e-" + Math.random().toString(36).slice(2, 9), icon: "★", label: "新条目", action: { type: "prompt", text: "" } });
-                editIndex = editDraft.length - 1;
-                renderEditor();
-              },
-            },
-            null
-          )
-        );
-        foot.appendChild(el("button", { type: "button", className: "dsr-mini", text: "导出", onClick: doExport }, null));
-        foot.appendChild(
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              text: "导入",
-              onClick: function () {
-                editShowImport = !editShowImport;
-                renderEditor();
-              },
-            },
-            null
-          )
-        );
-        foot.appendChild(
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              text: "恢复默认",
-              onClick: function () {
-                editDraft = clone(DEFAULT_ENTRIES.map(sanitizeEntry).filter(Boolean));
-                editNote = "已恢复默认，记得点保存";
-                renderEditor();
-              },
-            },
-            null
-          )
-        );
-      } else {
-        foot.appendChild(
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              text: "返回列表",
-              onClick: function () {
-                editIndex = null;
-                renderEditor();
-              },
-            },
-            null
-          )
-        );
-        foot.appendChild(
-          el(
-            "button",
-            {
-              type: "button",
-              className: "dsr-mini",
-              text: "删除此条",
-              onClick: function () {
-                editDraft.splice(editIndex, 1);
-                editIndex = null;
-                renderEditor();
-              },
-            },
-            null
-          )
-        );
-      }
-
-      foot.appendChild(el("span", { className: "dsr-spacer" }, null));
-      foot.appendChild(el("button", { type: "button", className: "dsr-mini", text: "取消", onClick: cancelEdit }, null));
-      foot.appendChild(el("button", { type: "button", className: "dsr-primary", text: "保存", onClick: commitEditor }, null));
-      if (editNote) foot.appendChild(el("div", { className: "dsr-hint", text: editNote }, null));
-      return foot;
-    }
-
-    function doExport() {
-      const text = JSON.stringify(editDraft, null, 2);
-      try {
-        const blob = new Blob([text], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = "dsh-sidebar-rail.json";
-        link.click();
-        window.setTimeout(function () {
-          URL.revokeObjectURL(url);
-        }, 1000);
-        editNote = "已导出文件";
-      } catch (err) {
-        diag.errors.push("export: " + String(err));
-        editNote = "导出失败，可改用导入框反向复制";
-      }
-      renderEditor();
-    }
-
-    // ------------------------------------------------------------ floating rail
-    /**
-     * 悬浮轨道：整条竖轨脱离侧边栏，固定在视口任意位置。
-     *
-     * 流畅性做法：
-     *  - 拖动过程中**只写 transform: translate3d()**，不碰 left/top，
-     *    全程合成层变换，不触发任何布局；指针事件用 rAF 合帧，一帧最多算一次。
-     *  - 松手后才把位移折算进 --dsr-float-x/y 变量并落盘，此时才有一次布局。
-     *  - 用 setPointerCapture 而不是 window 监听：指针移出视口也不会丢事件，
-     *    且不会像 window 监听那样在每个 mousemove 上跑一遍冒泡。
-     */
-    let floating = false;
-    let floatX = 12;
-    let floatY = 120;
-    let gripEl = null;
-    let floatRoot = null;
-    let floatDrag = null;
-    let floatRaf = 0;
-    let floatPending = null;
-    /** 拖动期间要跟着位移的层（nav + 自定义条目），按下时缓存一次 */
-    let floatLayers = null;
-    /** 轨道宽度（px），由 applyRailState 维护，悬浮态直接复用 */
-    let railWidthPx = RAIL_W;
-    /** 悬浮时盯住 nav 高度：面板图标增删会改高度，下面的自定义条目要跟着挪 */
-    let floatRO = null;
-    let floatROTarget = null;
-
-    function loadFloat() {
-      try {
-        const raw = window.localStorage.getItem(STORAGE_FLOAT);
-        const v = raw === null ? null : JSON.parse(raw);
-        if (v !== null && typeof v === "object") {
-          floating = v.on === true;
-          if (Number.isFinite(v.x)) floatX = v.x;
-          if (Number.isFinite(v.y)) floatY = v.y;
-        }
-      } catch (err) {
-        floating = false;
-      }
-    }
-
-    function saveFloat() {
-      try {
-        window.localStorage.setItem(STORAGE_FLOAT, JSON.stringify({ on: floating, x: Math.round(floatX), y: Math.round(floatY) }));
-      } catch (err) {
-        diag.errors.push("float-save: " + String(err));
-      }
-    }
-
-    /** 悬浮总高度：抓取条 + 面板轨道 + 自定义条目 */
-    function floatHeight() {
-      if (floatRoot === null) return 0;
-      let h = 22;
-      const nav = floatRoot.querySelector('[' + ATTR_PART + '="nav"]');
-      const custom = floatRoot.querySelector('[' + ATTR_PART + '="custom"]');
-      if (nav !== null) h += Math.round(nav.getBoundingClientRect().height);
-      if (custom !== null) h += Math.round(custom.getBoundingClientRect().height);
-      return h;
-    }
-
-    /** 把坐标夹进视口，四周留 8px 呼吸，避免贴边后抓不住 */
-    function clampFloat(x, y) {
-      const w = railWidthPx;
-      const vw = window.innerWidth || 0;
-      const vh = window.innerHeight || 0;
-      const h = floatHeight() || 200;
-      const maxX = Math.max(8, vw - w - 8);
-      const maxY = Math.max(8, vh - h - 8);
-      return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
-    }
-
-    /**
-     * 按下时把「允许的位移范围」算一次。
-     *
-     * 拖动中 applyFloat 是早退的（位置由 transform 独占，不能每帧重量几何），
-     * 所以拖动过程不做夹取；如果只在松手那一刻才夹，用户会看到轨道先跟手
-     * 到视口边缘、松手又突然被推回来——这就是「放开鼠标闪一下」的来源。
-     * 把夹取提前摊到拖动过程中，松手时坐标已经合法，clampFloat 不再改动它，
-     * 视觉上就完全连续。
-     */
-    function floatDragBounds() {
-      const pos = clampFloat(floatX, floatY);
-      const w = railWidthPx;
-      const vw = window.innerWidth || 0;
-      const vh = window.innerHeight || 0;
-      const h = floatHeight() || 200;
-      const minX = 8;
-      const minY = 8;
-      const maxX = Math.max(8, vw - w - 8);
-      const maxY = Math.max(8, vh - h - 8);
-      return {
-        minDx: minX - pos.x,
-        maxDx: maxX - pos.x,
-        minDy: minY - pos.y,
-        maxDy: maxY - pos.y,
-      };
-    }
-
-    /** 只在该变量确实变化时才写：无谓的 setProperty 会让整棵子树重算样式 */
-    function setVar(node, name, value) {
-      if (node.style.getPropertyValue(name) === value) return false;
-      node.style.setProperty(name, value);
-      return true;
-    }
-
-    /** 把位置落到 root 上的 CSS 变量；这是唯一会触发布局的地方 */
-    function applyFloat(root) {
-      if (root === null || root === undefined) return;
-      if (!floating) {
-        if (root.hasAttribute(ATTR_FLOAT)) root.removeAttribute(ATTR_FLOAT);
-        if (root.style.getPropertyValue("--dsr-float-x") !== "") {
-          root.style.removeProperty("--dsr-float-x");
-          root.style.removeProperty("--dsr-float-y");
-          root.style.removeProperty("--dsr-float-w");
-          root.style.removeProperty("--dsr-float-nav-h");
-        }
-        diag.floating = false;
-        removeGrip();
-        return;
-      }
-      // 拖动中位置由 transform 表达，这里再写一遍变量等于每帧强制同步布局：
-      // clampFloat → floatHeight → getBoundingClientRect，正是闪烁与掉帧的来源。
-      if (floatDrag !== null && floatDrag.active) return;
-      // 属性选择器 [data-dsh-rail-float="1"] 命中整棵子树：
-      // 值没变还反复 setAttribute 会白白让这些规则失效重算，拖动时尤其明显。
-      if (root.getAttribute(ATTR_FLOAT) !== "1") root.setAttribute(ATTR_FLOAT, "1");
-      floatRoot = root;
-      const pos = clampFloat(floatX, floatY);
-      floatX = pos.x;
-      floatY = pos.y;
-      setVar(root, "--dsr-float-x", Math.round(floatX) + "px");
-      setVar(root, "--dsr-float-y", Math.round(floatY) + "px");
-      setVar(root, "--dsr-float-w", railWidthPx + "px");
-      const nav = root.querySelector('[' + ATTR_PART + '="nav"]');
-      const navH = nav === null ? 0 : Math.round(nav.getBoundingClientRect().height);
-      setVar(root, "--dsr-float-nav-h", navH + "px");
-      ensureGrip(root);
-      // nav 的高度是自定义条目定位的参照，启动那几拍可能还没长到最终值
-      watchFloatNav(root);
-      diag.floating = true;
-      diag.floatPos = { x: Math.round(floatX), y: Math.round(floatY), w: railWidthPx, navH: navH };
-    }
-
-    /**
-     * 进入 / 退出悬浮。
-     *
-     * 悬浮时轨道离开侧边栏的定高容器，40px 纯图标条在视口里太难点，
-     * 所以进入悬浮就自动展开、停靠回来就自动收起——用户不必再单独点一次展开键。
-     */
-    function setFloating(on) {
-      const next = on === true;
-      const root = document.querySelector("[" + ATTR_ROOT + "]");
-      if (floating === next) {
-        applyFloat(root);
-        renderRail();
-        return;
-      }
-      // 首次悬浮要换默认落位；必须在 applyFloat 夹取之前判断，
-      // 否则夹取会把 (12,120) 改掉，这次判断就永远为假了。
-      const firstTime = next === true && floatX === 12 && floatY === 120;
-      floating = next;
-      railExpanded = next;
-      saveRailExpanded();
-      // 先把展开态落下来：railWidthPx 要反映展开后的真实宽度，
-      // 否则默认落位按 40px 算，随后会被夹取往左推，右侧只剩贴边的 8px。
-      if (root !== null) applyRailState(root);
-      if (firstTime) {
-        // 默认丢到视口右侧空白处。不能贴着侧边栏右侧放——悬浮后会话区的
-        // 左边距被释放了，贴着放会正好压住会话标题，等于「浮起来反而更差」。
-        const vw = window.innerWidth || 0;
-        const vh = window.innerHeight || 0;
-        floatX = Math.max(8, vw - railWidthPx - 24);
-        floatY = Math.max(24, Math.round(vh * 0.18));
-      }
-      applyFloat(root);
-      // 落位之后再存盘：saveFloat 必须在 applyFloat 夹取、并把默认落位写回
-      // floatX/floatY 之后调用，否则存进去的还是 (12,120) 这种初始值，
-      // 刷新后浮层停在左上角压着会话区，看起来就是「启动后模块不衔接」。
-      saveFloat();
-      // 图标/文案/aria 随 floating 与 railExpanded 变，必须重渲染一次轨道
-      renderRail();
-      scheduleReport();
-    }
-
-    function toggleFloat() {
-      setFloating(!floating);
-    }
-
-    // ------------------------------------------------------------- grip handle
-    function ensureGrip(root) {
-      if (gripEl !== null && gripEl.isConnected) {
-        // 拖动中这几条变换由 paintFloatDelta 独占，别再插一手写变量，
-        // 否则每帧都要重算一次样式，还会和位移打架。
-        if (floatDrag === null) {
-          setVar(gripEl, "--dsr-float-x", Math.round(floatX) + "px");
-          setVar(gripEl, "--dsr-float-y", Math.round(floatY) + "px");
-          setVar(gripEl, "--dsr-float-w", railWidthPx + "px");
-        }
-        return;
-      }
-      removeGrip();
-      gripEl = el(
-        "div",
-        {
-          "data-dsh-rail-grip": "1",
-          title: "拖动可把功能条放到任意位置 · 双击停靠回侧边栏",
-          role: "button",
-          tabindex: "0",
-          "aria-label": "拖动手柄：把功能条放到任意位置，双击停靠回侧边栏",
-        },
-        [el("span", { className: "dsr-grip-dots", text: "⋮⋮" }, null)]
-      );
-      gripEl.style.setProperty("--dsr-float-x", Math.round(floatX) + "px");
-      gripEl.style.setProperty("--dsr-float-y", Math.round(floatY) + "px");
-      gripEl.style.setProperty("--dsr-float-w", railWidthPx + "px");
-      gripEl.addEventListener("pointerdown", onGripPointerDown);
-      gripEl.addEventListener("dblclick", function () {
-        setFloating(false);
-      });
-      gripEl.addEventListener("keydown", function (event) {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          setFloating(false);
-        }
-      });
-      document.body.appendChild(gripEl);
-      void root;
-    }
-
-    /**
-     * 盯住 nav 的高度。
-     *
-     * 悬浮时整条轨道被拆成「抓取条 / 面板图标 / 自定义条目」三段独立定位，
-     * 自定义条目的 top 是靠 --dsr-float-nav-h 算出来的。启动那一刻 nav 往往还没
-     * 长到最终高度（DSH 的面板列表是之后才渲染进来的、字体也可能晚一拍），
-     * 于是这个变量量到的是偏小的旧值——下面的自定义条目就停在错误的位置，
-     * 跟上面的图标段之间裂开一条缝或者压在一起，也就是「模块不衔接」。
-     * 所以这里持续观察，高度一变就补写。
-     */
-    function watchFloatNav(root) {
-      if (floatRO !== null && floatROTarget === root) return;
-      unwatchFloatNav();
-      if (typeof ResizeObserver !== "function") return;
-      const nav = root.querySelector('[' + ATTR_PART + '="nav"]');
-      if (nav === null) return;
-      floatROTarget = root;
-      floatRO = new ResizeObserver(function () {
-        if (!floating || root.getAttribute(ATTR_FLOAT) !== "1") return;
-        // 拖动中位置由 transform 独占，别再插一手让布局跟着跳
-        if (floatDrag !== null) return;
-        const h = Math.round(nav.getBoundingClientRect().height);
-        if (h <= 0) return;
-        setVar(root, "--dsr-float-nav-h", h + "px");
-        if (diag.floatPos !== null) diag.floatPos.navH = h;
-      });
-      floatRO.observe(nav);
-    }
-
-    function unwatchFloatNav() {
-      if (floatRO !== null) {
-        try {
-          floatRO.disconnect();
-        } catch (err) {
-          /* 忽略 */
-        }
-        floatRO = null;
-      }
-      floatROTarget = null;
-    }
-
-    function removeGrip() {
-      if (gripEl !== null) {
-        gripEl.remove();
-        gripEl = null;
-      }
-      unwatchFloatNav();
-      floatRoot = null;
-    }
-
-    /**
-     * 拖动中把位移写到三个悬浮层的 transform 上（不触发布局）。
-     *
-     * 三层元素在按下时缓存一次：拖动每帧都要用，反复 querySelector
-     * 会在 DSH 这种深层 DOM 上白白烧掉主线程时间。
-     */
-    function paintFloatDelta(dx, dy) {
-      const t = dx === 0 && dy === 0 ? "" : "translate3d(" + dx + "px," + dy + "px,0)";
-      if (gripEl !== null) gripEl.style.transform = t;
-      const layers = floatLayers;
-      if (layers !== null) {
-        for (const node of layers) {
-          if (node !== null && node.isConnected) node.style.transform = t;
-        }
-      } else if (floatRoot !== null) {
-        const nav = floatRoot.querySelector('[' + ATTR_PART + '="nav"]');
-        const custom = floatRoot.querySelector('[' + ATTR_PART + '="custom"]');
-        if (nav !== null) nav.style.transform = t;
-        if (custom !== null) custom.style.transform = t;
-      }
-    }
-
-    function flushFloatFrame() {
-      floatRaf = 0;
-      const pending = floatPending;
-      if (pending === null || floatDrag === null) return;
-      floatPending = null;
-      paintFloatDelta(pending.dx, pending.dy);
-    }
-
-    function onGripPointerDown(event) {
-      if (event.button !== 0) return;
-      if (gripEl === null) return;
-      event.preventDefault();
-      const startX = floatX;
-      const startY = floatY;
-      floatDrag = { x0: event.clientX, y0: event.clientY, sx: startX, sy: startY, active: false, dx: 0, dy: 0, bounds: null };
-      // 缓存位移目标：拖动每帧都要写，别在 DSH 的深层 DOM 里反复 querySelector
-      if (floatRoot !== null) {
-        floatLayers = [
-          floatRoot.querySelector('[' + ATTR_PART + '="nav"]'),
-          floatRoot.querySelector('[' + ATTR_PART + '="custom"]'),
-        ];
-      } else {
-        floatLayers = null;
-      }
-      try {
-        gripEl.setPointerCapture(event.pointerId);
-      } catch (err) {
-        /* 某些环境不支持指针捕获，退回普通监听 */
-      }
-      gripEl.addEventListener("pointermove", onGripPointerMove);
-      gripEl.addEventListener("pointerup", onGripPointerUp);
-      gripEl.addEventListener("pointercancel", onGripPointerUp);
-    }
-
-    function onGripPointerMove(event) {
-      if (floatDrag === null) return;
-      const dx = event.clientX - floatDrag.x0;
-      const dy = event.clientY - floatDrag.y0;
-      if (!floatDrag.active) {
-        if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
-        floatDrag.active = true;
-        // 夹取范围只算一次：拖动过程中视口与轨道尺寸不会变
-        floatDrag.bounds = floatDragBounds();
-        if (document.body) document.body.classList.add("dsr-float-dragging");
-      }
-      event.preventDefault();
-      const b = floatDrag.bounds;
-      const cdx = b === null ? dx : Math.min(Math.max(dx, b.minDx), b.maxDx);
-      const cdy = b === null ? dy : Math.min(Math.max(dy, b.minDy), b.maxDy);
-      floatDrag.dx = cdx;
-      floatDrag.dy = cdy;
-      floatPending = { dx: cdx, dy: cdy };
-      if (floatRaf === 0) floatRaf = window.requestAnimationFrame(flushFloatFrame);
-    }
-
-    function onGripPointerUp(event) {
-      if (gripEl !== null) {
-        gripEl.removeEventListener("pointermove", onGripPointerMove);
-        gripEl.removeEventListener("pointerup", onGripPointerUp);
-        gripEl.removeEventListener("pointercancel", onGripPointerUp);
-        try {
-          gripEl.releasePointerCapture(event.pointerId);
-        } catch (err) {
-          /* 忽略 */
-        }
-      }
-      if (floatRaf !== 0) {
-        window.cancelAnimationFrame(floatRaf);
-        floatRaf = 0;
-      }
-      floatPending = null;
-      const d = floatDrag;
-      floatDrag = null;
-      floatLayers = null;
-      if (d === null) return;
-      if (!d.active) {
-        paintFloatDelta(0, 0);
-        return;
-      }
-      if (document.body) document.body.classList.remove("dsr-float-dragging");
-      floatX = d.sx + d.dx;
-      floatY = d.sy + d.dy;
-      /**
-       * 顺序很关键：**先落位、再清 transform**。
-       *
-       * transform 与 will-change 都由合成器线程处理，一清掉合成器马上就能把
-       * 轨道画回 CSS 变量所指的旧位置；而 left/top 这类布局属性必须等主线程
-       * 这一轮任务结束才提交。所以旧顺序（先 paintFloatDelta(0,0) 再 applyFloat）
-       * 会先闪回原位、再跳到新位——就是「放开鼠标闪一下」。
-       * 反过来先写变量，主线程在同一次样式重算里把位置更新掉，合成器拿到的
-       * 已经是终点坐标，没有中间态可显示。
-       *
-       * applyFloat 内部会把坐标夹进视口并回写 floatX/floatY，
-       * 所以必须落在 saveFloat 之前，否则会把视口外的坐标存进去。
-       */
-      applyFloat(floatRootGood());
-      paintFloatDelta(0, 0);
-      saveFloat();
-      // 拖动期间 schedule 被冻结，松手后补一次同步把几何追平
-      schedule();
-      scheduleReport();
-    }
-
-    function floatRootGood() {
-      if (floatRoot !== null && floatRoot.isConnected) return floatRoot;
-      return document.querySelector("[" + ATTR_ROOT + "]");
-    }
-
-    /** 窗口尺寸变化后重新夹一次，避免悬浮条跑到屏幕外 */
-    function reclampFloat() {
-      if (!floating) return;
-      const root = floatRootGood();
-      if (root === null) return;
-      applyFloat(root);
-    }
-
-    function cancelFloatDrag() {
-      if (floatRaf !== 0) {
-        window.cancelAnimationFrame(floatRaf);
-        floatRaf = 0;
-      }
-      floatPending = null;
-      if (gripEl !== null) {
-        gripEl.removeEventListener("pointermove", onGripPointerMove);
-        gripEl.removeEventListener("pointerup", onGripPointerUp);
-        gripEl.removeEventListener("pointercancel", onGripPointerUp);
-      }
-      floatDrag = null;
-      floatLayers = null;
-      paintFloatDelta(0, 0);
-      if (document.body) document.body.classList.remove("dsr-float-dragging");
-    }
 
     // ---------------------------------------------------------- anchor engine
     let observer = null;
@@ -2044,16 +979,11 @@ window.__ModuleLoader__.load({
       });
       if (mountEl !== null) mountEl.remove();
       mountEl = null;
-      navEl = null;
       railSig = "";
-      // 悬浮层的把手与拖拽残留一并撤掉（floating 这个偏好本身保留，下次锚点回来还能复现）
-      cancelFloatDrag();
-      removeGrip();
-      if (floating) {
-        document.querySelectorAll('[' + ATTR_FLOAT + ']').forEach(function (node) {
-          node.removeAttribute(ATTR_FLOAT);
-        });
-      }
+      // 拖拽模块的 nav 引用与进行中的拖拽状态（模块缺席时是空操作）
+      callModule("drag", "clearNav", [], null);
+      // 悬浮层的把手与拖拽残留一并撤掉（悬浮这个偏好本身保留，下次锚点回来还能复现）
+      callModule("float", "detach", [], null);
       diag.tagged = false;
       diag.floating = false;
     }
@@ -2125,10 +1055,9 @@ window.__ModuleLoader__.load({
           nav.setAttribute(ATTR_PART, "nav");
           tagLabels(nav);
           // 面板图标也支持拖拽排序：先绑定，再把记忆中的顺序落上去。
-          // React 重渲染会重建这些按钮，applyNavOrder 是幂等的，每次 sync 重放一遍即可。
-          navEl = nav;
-          attachDrag(navEl);
-          applyNavOrder(navEl);
+          // React 重渲染会重建这些按钮，setNav 是幂等的，每次 sync 重放一遍即可。
+          // 拖拽模块缺席/已坏时这两步直接跳过，面板图标退回原生顺序。
+          callModule("drag", "setNav", [nav], null);
         }
         region.setAttribute(ATTR_PART, "region");
 
@@ -2155,7 +1084,7 @@ window.__ModuleLoader__.load({
         applyRailState(root);
         measureCustom();
         // 悬浮态要在几何量完之后落位：轨道高度由上面两步才确定
-        applyFloat(root);
+        if (floatState()) callModule("float", "apply", [root], null);
         diag.tagged = true;
 
         // 采集几何，供宿主侧 last-report.json 判断「是否真的并列」
@@ -2214,7 +1143,7 @@ window.__ModuleLoader__.load({
       // 拖动悬浮条期间冻结同步：DSH 流式输出会不停改 DOM 触发 observer，
       // 每次 sync 都要量几何（强制同步布局），和拖拽抢主线程就是卡顿与闪烁的来源。
       // 拖动只改 transform，本来也不需要重量几何；松手后补一次即可。
-      if (floatDrag !== null && floatDrag.active) return;
+      if (callModule("float", "isDragging", [], false) === true) return;
       const raf = window.requestAnimationFrame || function (fn) {
         return window.setTimeout(fn, 16);
       };
@@ -2227,9 +1156,10 @@ window.__ModuleLoader__.load({
     function isOurNode(node) {
       if (node === null) return false;
       if (mountEl !== null && (node === mountEl || mountEl.contains(node))) return true;
-      if (editorHost !== null && (node === editorHost || editorHost.contains(node))) return true;
+      // 内联编辑弹层由设置模块管理，它自己认
+      if (callModule("settings", "ownsNode", [node], false) === true) return true;
       // 抓取条挂在 body 上，插入/移除会触发 observer；不认作自己的节点就会自激循环
-      if (gripEl !== null && (node === gripEl || gripEl.contains(node))) return true;
+      if (callModule("float", "ownsNode", [node], false) === true) return true;
       return false;
     }
 
@@ -2253,7 +1183,7 @@ window.__ModuleLoader__.load({
       // 窗口尺寸或侧边栏宽度变化后重新量取几何
       resizeHandler = function () {
         // 悬浮条先夹一次：窗口缩小后它可能已跑到视口外，抓不住就再也拖不回来
-        reclampFloat();
+        callModule("float", "reclamp", [], null);
         schedule();
       };
       window.addEventListener("resize", resizeHandler);
@@ -2284,10 +1214,10 @@ window.__ModuleLoader__.load({
         window.removeEventListener("resize", resizeHandler);
         resizeHandler = null;
       }
-      cancelDrag();
-      closeEditor();
+      callModule("drag", "cancel", [], null);
+      callModule("settings", "closeEditor", [], null);
       clearTags();
-      settingsHost = null;
+      callModule("settings", "clearHost", [], null);
       if (stylesDispose !== null) {
         stylesDispose();
         stylesDispose = null;
@@ -2302,6 +1232,15 @@ window.__ModuleLoader__.load({
       inputActionsRef = (props && props.inputActions) || null;
       diag.hasInput = inputActionsRef !== null;
       return null;
+    }
+
+    /**
+     * 注册给 slots 的包装组件：真正的面板由可选模块提供。
+     * 模块没装好 / 渲染抛错时返回 null——设置页里只是这一块空着，
+     * 不会把整个设置页或侧边栏带崩。
+     */
+    function SettingsSectionSlot(props) {
+      return callModule("settings", "SettingsSection", [props], null);
     }
 
     // ------------------------------------------------------------------- apply
@@ -2324,13 +1263,12 @@ window.__ModuleLoader__.load({
 
       loadEntries();
       loadRailExpanded();
-      // 面板图标顺序必须在第一次 sync 之前读进来，否则刷新后 applyNavOrder
-      // 拿到空数组，会按 DOM 原始顺序重排，看起来像「顺序没保存」。
-      loadNavOrder();
-      // 悬浮偏好同理：要先于首次 sync 载入，否则会先按停靠态渲染再跳一次
-      loadFloat();
-      resetDraft();
       stylesDispose = installStyles();
+
+      // 可选模块装配放在最前：拖拽顺序、悬浮偏好、设置页草稿都要在首次 sync 之前就绪，
+      // 否则刷新后会先按原生顺序/停靠态渲染一次再跳。loadModules 内部逐模块 try/catch，
+      // 任一模块失败都只影响那一个功能，不影响下面的锚点监听与布局。
+      const modulesReady = loadModules();
 
       if (ctx.slots !== undefined && typeof ctx.slots.inject === "function") {
         ctx.slots.inject(INPUT_SLOT, function () {
@@ -2338,12 +1276,13 @@ window.__ModuleLoader__.load({
         });
 
         // 设置页：条目编辑搬进 DSH 官方设置，侧边栏不再有齿轮入口。
-        // 注册失败（例如 renderer 不接受）不能影响布局，因此整段包 try/catch。
+        // 槽位永远注册（DSH 侧不区分模块在不在），真正渲染时才问模块；
+        // 模块缺席时返回 null，设置页里就是一块空白，不影响其他设置项。
         try {
           ctx.slots.inject(SETTINGS_SECTION, function () {
             return ctx.slots.register(
               { name: SETTINGS_SECTION, id: SETTINGS_SECTION_ID, order: 820, label: function () { return "侧边栏条目"; } },
-              SettingsSection
+              SettingsSectionSlot
             );
           });
           ctx.slots.inject("settings.section.icon", function () {
@@ -2371,6 +1310,13 @@ window.__ModuleLoader__.load({
       }
 
       startWatch();
+
+      // 模块是异步拉的，装配完成后自己会重放一次渲染与调度；
+      // 这里 await 一下只为让诊断报告在第一帧就带上「哪些模块活着」。
+      modulesReady.then(function () {
+        schedule();
+        scheduleReport();
+      });
 
       if (typeof ctx.effect === "function") {
         ctx.effect(function () {

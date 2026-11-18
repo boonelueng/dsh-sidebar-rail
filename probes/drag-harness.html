@@ -74,20 +74,55 @@
 </div>
 
 <script>
-  // 最小 __ModuleLoader__ 桩：只捕获模块工厂，不参与 DSH 真实依赖解析
+  // 最小 __ModuleLoader__ 桩：只捕获模块工厂，不参与 DSH 真实依赖解析。
+  // 插件已拆成「内核 + 三个可选 chunk」，每个 chunk 都会走一次 load()，
+  // 靠 registration.chunk 区分（与 DSH 的 chunkId(ownerId, fileName) 一致）。
   window.__moduleCapture = null;
+  window.__moduleRegistry = {};
   window.__ModuleLoader__ = {
-    load: function (mod) { window.__moduleCapture = mod; }
+    load: function (mod) {
+      if (!mod) return;
+      var key = mod.chunk || "client.js";
+      window.__moduleRegistry[key] = mod;
+      if (mod.chunk === undefined) window.__moduleCapture = mod;
+    }
   };
 </script>
 <script src="../client.js"></script>
+<script src="../client.drag.js"></script>
+<script src="../client.float.js"></script>
+<script src="../client.settings.js"></script>
 <script>
   (function () {
     var mod = window.__moduleCapture;
     if (!mod) { document.title = "LOAD-FAIL"; return; }
-    var exportsObj = mod.factory(function (name) {
-      throw new Error("unexpected require: " + name);
-    });
+
+    // 已物化的 chunk exports（对应 DSH 里 require.async 的缓存）
+    var materialized = {};
+    function materialize(key, ownerRequire) {
+      if (materialized[key]) return materialized[key];
+      var reg = window.__moduleRegistry[key];
+      if (!reg) throw new Error("chunk not registered: " + key);
+      materialized[key] = reg.factory(ownerRequire);
+      return materialized[key];
+    }
+
+    // require 桩：既支持 DSH 的异步子模块（./client.X.js），
+    // 其余裸模块名一律报错——回归台本来就不该依赖宿主服务。
+    function makeRequire() {
+      var req = function (name) {
+        throw new Error("unexpected require: " + name);
+      };
+      req.async = function (spec) {
+        var fileName = String(spec).replace(/^\.\//, "");
+        return Promise.resolve().then(function () {
+          return materialize(fileName, makeRequire());
+        });
+      };
+      return req;
+    }
+
+    var exportsObj = mod.factory(makeRequire());
     // 桩 ctx：只提供插件真正会用到的面。slots.inject 只记录不回调，
     // 因此不需要 react，也不会渲染设置页。
     var injected = [];
@@ -114,6 +149,27 @@
     window.__HARNESS__ = {
       injected: injected,
       registered: registered,
+      /** 三个可选模块是否都装配成功（探针据此判断降级路径有没有被误触发） */
+      modulesReady: function () {
+        return new Promise(function (resolve) {
+          var tries = 0;
+          (function poll() {
+            var d = window.__DSH_RAIL__;
+            var errs = (d && d.errors) || [];
+            var faulted = 0;
+            for (var i = 0; i < errs.length; i++) {
+              if (String(errs[i]).indexOf("module ") === 0) faulted++;
+            }
+            if (faulted === 0 && document.querySelector('[data-dsh-rail-part="custom"] .dsr-float-toggle')) {
+              resolve({ ready: true, faulted: 0 });
+              return;
+            }
+            tries++;
+            if (tries > 60) { resolve({ ready: false, faulted: faulted, errors: errs }); return; }
+            setTimeout(poll, 25);
+          })();
+        });
+      },
       labelsInDomOrder: function () {
         return navButtons().map(function (b) { return b.getAttribute("aria-label"); });
       },

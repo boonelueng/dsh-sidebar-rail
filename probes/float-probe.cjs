@@ -124,6 +124,9 @@ async function main() {
         await sleep(250);
       }
       if (!ready) throw new Error("harness not ready (" + label + "): " + (await evalJs("document.title")));
+      // 悬浮/拖拽/设置已拆成独立 chunk，异步装配；等三个都就位再量，
+      // 否则会拍到一个还没有悬浮按钮的中间态。
+      result.modulesReady = await evalJs("window.__HARNESS__.modulesReady()");
       await sleep(700);
     };
 

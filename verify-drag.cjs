@@ -453,15 +453,26 @@ sandbox.window.removeEventListener = window.removeEventListener;
 sandbox.globalThis = sandbox;
 
 let captured = null;
+const chunkRegistrations = new Map();
 sandbox.window.__ModuleLoader__ = {
   load(mod) {
-    captured = mod;
+    if (!mod) return;
+    const key = mod.chunk === undefined ? null : mod.chunk;
+    if (key === null) captured = mod;
+    else chunkRegistrations.set(key, mod);
   },
 };
 sandbox.self = sandbox.window;
 
 const ctx = vm.createContext(sandbox);
 vm.runInContext(SRC, ctx, { filename: "client.js" });
+// 三个可选 chunk 与内核同处一个沙箱：DSH 里它们是独立 bundle，但共享同一个 __ModuleLoader__
+for (const chunkFile of ["client.drag.js", "client.float.js", "client.settings.js"]) {
+  const chunkPath = path.join(__dirname, chunkFile);
+  if (!fs.existsSync(chunkPath)) continue;
+  const chunkSrc = fs.readFileSync(chunkPath, "utf8");
+  vm.runInContext(chunkSrc, ctx, { filename: chunkFile });
+}
 
 if (!captured) {
   console.error("FAIL: plugin never called __ModuleLoader__.load");
@@ -473,7 +484,7 @@ check("module id", captured.id === "dsh-sidebar-rail", captured.id);
 check("inject = ['slots']", JSON.stringify(exp.inject) === '["slots"]', exp.inject);
 
 function makeRequire() {
-  return function require(name) {
+  const require = function require(name) {
     if (name === "react") {
       // 只是让 SettingsSection 能拿到 createElement；桩里不真的渲染
       return {
@@ -489,6 +500,18 @@ function makeRequire() {
     if (name === "react/jsx-runtime") return { jsx: (t, p) => ({ t, p }), jsxs: (t, p) => ({ t, p }) };
     throw new Error("unexpected require: " + name);
   };
+  // 与 DSH client-modules 一致：require.async("./client.X.js") 取同 owner 的 chunk
+  const materialized = new Map();
+  require.async = async function (spec) {
+    const fileName = String(spec).replace(/^\.\//, "");
+    if (materialized.has(fileName)) return materialized.get(fileName);
+    const reg = chunkRegistrations.get(fileName);
+    if (!reg) throw new Error("chunk not registered: " + fileName);
+    const chunkExports = reg.factory(makeRequire());
+    materialized.set(fileName, chunkExports);
+    return chunkExports;
+  };
+  return require;
 }
 
 // ------------------------------------------------------------- run apply()
