@@ -597,9 +597,13 @@ window.__ModuleLoader__.load({
       "}",
       '[data-dsh-rail-root][data-dsh-rail-expanded="1"] .dsr-btn .dsr-btn-label{display:inline}',
 
-      /* 会话区接住剩余宽度；左边距由 measureRailBounds 逐次量算，保证紧贴轨道 */
+      /* 会话区接住剩余宽度。
+         左边距直接由「轨道宽度 − root 自身左内边距」算出来，不再依赖脚本写进来的快照值：
+         --dsr-rail-w 是唯一权威来源，它一变左边距立刻跟着变，
+         不会出现「轨道已收回 40px、会话区还按 130px 让位」这种过期状态。 */
       '[data-dsh-rail-root] > [data-dsh-rail-part="region"]{',
-      "margin-left:var(--dsr-region-ml,42px)!important;padding-left:0!important;",
+      "margin-left:calc(var(--dsr-rail-w,40px) + 1px - var(--dsr-pad-left,8px))!important;",
+      "padding-left:0!important;",
       "}",
 
       /* 没有面板图标时退回原生内缩 */
@@ -930,13 +934,16 @@ window.__ModuleLoader__.load({
       setVar(root, "--dsr-rail-top", top + "px");
       setVar(root, "--dsr-rail-bottom", bottom + "px");
 
-      // 会话区左边距：让会话区紧贴轨道右边缘（轨道 40px 宽 + 边框，再留 1px 呼吸）
+      // 会话区左边距：CSS 用 calc(轨道宽度 + 1px - root 左内边距) 现场算，
+      // 这里只负责把「root 左内边距」喂给它。轨道宽度本身交给 --dsr-rail-w，
+      // 于是左边距在任何时刻都跟着轨道宽度走，不存在需要「记得重新量一次」的窗口期
+      // （停靠那一瞬 nav 的渲染宽度还是展开值，按实测值算就会把 130px 写进左边距）。
       const nav = root.querySelector('[' + ATTR_PART + '="nav"]');
       if (nav !== null) {
-        const navW = Math.round(nav.getBoundingClientRect().width) || 40;
         const rootPadLeft = parseFloat(cs.paddingLeft) || 0;
-        // region 的 margin-left 与 root 的 padding-left 共同决定它的左边界
-        const ml = Math.max(0, navW + 1 - rootPadLeft);
+        setVar(root, "--dsr-pad-left", rootPadLeft + "px");
+        // 同时留一份快照值：探针与诊断读它，避免它们改读 CSS 计算值。
+        const ml = Math.max(0, railWidthPx + 1 - rootPadLeft);
         setVar(root, "--dsr-region-ml", ml + "px");
       }
     }

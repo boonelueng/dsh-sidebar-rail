@@ -511,6 +511,28 @@ async function main() {
         d.frames.every((f) => f.ml === d.after.ml), { want: d.after.ml, got: d.frames.map((f) => f.ml) });
     }
 
+    // ---------------------- 左边距必须由轨道宽度现场算出，不能依赖脚本写的快照值
+    // 结构上把「过期快照」这个 bug 类别消灭掉：故意把 --dsr-region-ml 写成错误值，
+    // 只要 --dsr-rail-w 是对的，会话区位置就必须纹丝不动。
+    result.steps.mlDerived = await evalJs(`(async () => {
+      const H = window.__HARNESS__;
+      const root = H.root();
+      const region = H.regionBox();
+      const x0 = Math.round(region.getBoundingClientRect().left);
+      const ml0 = getComputedStyle(region).marginLeft;
+      root.style.setProperty('--dsr-region-ml', '123px');
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      const x1 = Math.round(region.getBoundingClientRect().left);
+      const ml1 = getComputedStyle(region).marginLeft;
+      root.style.removeProperty('--dsr-region-ml');
+      return { x0, x1, ml0, ml1, railW: root.style.getPropertyValue('--dsr-rail-w') };
+    })()`);
+    {
+      const d = result.steps.mlDerived;
+      check("左边距由轨道宽度算出（写坏的快照值不改位置）",
+        Math.abs(d.x1 - d.x0) <= 1 && d.ml1 === d.ml0, d);
+    }
+
     // ---------------------- 从收起态再悬浮：必须自动展开（不需要手动点两次）
     // 上一节停靠后已自动收起到 40px，这里直接点悬浮，验证「一次点击即展开」
     const collapsedBeforeFloat = await evalJs(`(() => {
