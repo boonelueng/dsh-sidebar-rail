@@ -178,6 +178,7 @@ window.__ModuleLoader__.load({
       scheduleReport: scheduleReport,
       renderRail: renderRail,
       applyRailState: applyRailState,
+      measureCustom: measureCustom,
       setRailExpanded: setRailExpanded,
       isRailExpanded: function () {
         return railExpanded === true;

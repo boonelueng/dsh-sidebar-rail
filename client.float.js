@@ -142,11 +142,19 @@ window.__ModuleLoader__.load({
 
 
 
-    /** 把位置落到 root 上的 CSS 变量；这是唯一会触发布局的地方 */
+    /**
+     * 把位置落到 root 上的 CSS 变量；这是唯一会触发布局的地方
+     */
     function applyFloat(root) {
       if (root === null || root === undefined) return;
       if (!floating) {
-        if (root.hasAttribute(ATTR_FLOAT)) root.removeAttribute(ATTR_FLOAT);
+        // 停靠：先摘掉浮层标记，nav 才会从 fixed 回到 absolute、宽度从
+        // 展开的 130px 收回 40px。这一步会改变 nav 的实测宽度，而
+        // --dsr-region-ml 正是按 nav 宽度算的——摘完必须立刻重量一次，
+        // 否则会话区会带着悬浮态算出的 123px 左缩进停在原地，
+        // 直到下一次 sync 才跳回来（用户看到的就是「停靠后内容偏移」）。
+        const hadAttr = root.hasAttribute(ATTR_FLOAT);
+        if (hadAttr) root.removeAttribute(ATTR_FLOAT);
         if (root.style.getPropertyValue("--dsr-float-x") !== "") {
           root.style.removeProperty("--dsr-float-x");
           root.style.removeProperty("--dsr-float-y");
@@ -155,6 +163,7 @@ window.__ModuleLoader__.load({
         }
         diag.floating = false;
         removeGrip();
+        if (hadAttr) api.measureCustom();
         return;
       }
       // 拖动中位置由 transform 表达，这里再写一遍变量等于每帧强制同步布局：
@@ -511,12 +520,17 @@ window.__ModuleLoader__.load({
     exports.detach = function () {
       cancelFloatDrag();
       removeGrip();
+      let cleared = false;
       if (floating) {
         document.querySelectorAll("[" + ATTR_FLOAT + "]").forEach(function (node) {
           node.removeAttribute(ATTR_FLOAT);
+          cleared = true;
         });
       }
       diag.floating = false;
+      // 与 applyFloat 的停靠分支同理：nav 宽度变了就得重量一次，
+      // 否则会话区会带着悬浮态的左缩进停在原地。
+      if (cleared) api.measureCustom();
     };
     /** 抓手挂在 body 上，内核的 observer 需要认它，否则会自激循环 */
     exports.ownsNode = function (node) {

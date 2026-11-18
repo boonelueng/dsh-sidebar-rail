@@ -468,6 +468,49 @@ async function main() {
       { docked: dockedRegion, afterDock: result.steps.afterDock.region });
     await shot("shot-float-docked.png");
 
+    // ---------------------- 停靠瞬间不能有中间态：会话区必须一步到位
+    // 曾经的真 bug：停靠时先按悬浮态（nav 130px）量出 --dsr-region-ml=123px，
+    // 摘掉浮层标记后 nav 已收回 40px，却没人重量——会话区会带着 123px 的左缩进
+    // 停在同一帧到下一次 sync（约 100ms）后才跳回来，看起来就是「停靠后内容偏移」。
+    // 这里在 dblclick 的同一帧、微任务、下一帧各抓一次，要求 ml 全程等于停靠态的值。
+    result.steps.dockAtomic = await evalJs(`(async () => {
+      const H = window.__HARNESS__;
+      const root = H.root();
+      const nav = root.querySelector('[data-dsh-rail-part="nav"]');
+      const region = H.regionBox();
+      const snap = () => ({
+        ml: root.style.getPropertyValue('--dsr-region-ml'),
+        mlComp: getComputedStyle(region).marginLeft,
+        navW: nav ? Math.round(nav.getBoundingClientRect().width) : null,
+        regionX: Math.round(region.getBoundingClientRect().left),
+        attr: root.getAttribute('data-dsh-rail-float'),
+      });
+      // 先重新进入悬浮，才能测「从悬浮停靠」
+      H.floatToggle().click();
+      await new Promise((r) => setTimeout(r, 700));
+      const before = snap();
+      const grip = H.grip();
+      const frames = [];
+      grip.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      frames.push(snap());
+      await Promise.resolve();
+      frames.push(snap());
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      frames.push(snap());
+      await new Promise((r) => setTimeout(r, 400));
+      const after = snap();
+      return { before, frames, after };
+    })()`);
+    {
+      const d = result.steps.dockAtomic;
+      const target = d.after.regionX;
+      const bad = d.frames.filter((f) => Math.abs(f.regionX - target) > 3);
+      check("停靠瞬间：会话区不出现中间位置（同帧/微任务/下一帧都在位）",
+        bad.length === 0, { target, bad, before: d.before, after: d.after });
+      check("停靠瞬间：--dsr-region-ml 立刻是停靠态的值",
+        d.frames.every((f) => f.ml === d.after.ml), { want: d.after.ml, got: d.frames.map((f) => f.ml) });
+    }
+
     // ---------------------- 从收起态再悬浮：必须自动展开（不需要手动点两次）
     // 上一节停靠后已自动收起到 40px，这里直接点悬浮，验证「一次点击即展开」
     const collapsedBeforeFloat = await evalJs(`(() => {
