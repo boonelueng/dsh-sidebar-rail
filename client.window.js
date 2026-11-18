@@ -216,10 +216,43 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /*
+     * 三个动作（关闭 / 最小化 / 最大化）直接用 pointerdown 触发。
+     *
+     * 为什么不用 click：官方弹窗会用 useModalLayer 在 document 上挂捕获阶段的指针监听
+     * （点面板外就关闭），我们这批按钮是挂进官方面板的外来节点，pointerdown 阶段
+     * 一旦被它判定成「从外面开始按」，click 可能根本走不完。
+     * 自己认 pointerdown，再用一次性的 pointerup/pointercancel 兜底，就不用依赖 click 的存活。
+     */
+    function bindLightAction(node, run) {
+      const onDown = function (event) {
+        if (event.button !== undefined && event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        // 按下即生效：这些动作都是幂等的界面操作，重复点一次也只是再多切一次
+        run();
+        node.removeEventListener("pointerup", onUp);
+        node.removeEventListener("pointercancel", onUp);
+      };
+      const onUp = function () { /* 兜底占位：动作已在 pointerdown 完成 */ };
+      node.addEventListener("pointerdown", onDown);
+      node.addEventListener("pointerup", onUp);
+      node.addEventListener("pointercancel", onUp);
+      // 键盘可达性：Enter/Space 也要能触发
+      node.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        run();
+      });
+    }
+
     // ------------------------------------------------------------------ 渲染
     function ensureLights() {
+      // 已连在面板上就什么都不用做；脱离（面板被宿主重挂载）就整组重建，
+      // 重建后下面会重新挂一遍动作处理。
       if (lightsEl !== null && lightsEl.isConnected) return;
-      lightsEl = el("div", {
+      if (lightsEl === null) lightsEl = el("div", {
         "data-dsh-rail-win-lights": "1",
         role: "group",
         "aria-label": "窗口控制",
@@ -230,11 +263,6 @@ window.__ModuleLoader__.load({
           "aria-label": "关闭设置",
           title: "关闭",
           "data-dsr-light": "close",
-          onClick: function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            closeWindow();
-          },
         }, null),
         el("button", {
           type: "button",
@@ -242,11 +270,6 @@ window.__ModuleLoader__.load({
           "aria-label": "最小化设置",
           title: "最小化",
           "data-dsr-light": "min",
-          onClick: function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            setMinimized(!minimized);
-          },
         }, null),
         el("button", {
           type: "button",
@@ -254,13 +277,15 @@ window.__ModuleLoader__.load({
           "aria-label": "最大化设置",
           title: "最大化 / 还原",
           "data-dsr-light": "max",
-          onClick: function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            toggleMax();
-          },
         }, null),
       ]);
+      // 三个圆点统一走 bindLightAction：指针按下即生效，不依赖 click 是否走完
+      const dots = lightsEl.querySelectorAll(".dsr-light");
+      if (dots.length === 3) {
+        bindLightAction(dots[0], closeWindow);
+        bindLightAction(dots[1], function () { setMinimized(!minimized); });
+        bindLightAction(dots[2], toggleMax);
+      }
       panelEl.appendChild(lightsEl);
     }
 
@@ -268,8 +293,18 @@ window.__ModuleLoader__.load({
       if (gripEl !== null && gripEl.isConnected) return;
       gripEl = el("div", { "data-dsh-rail-win-grip": "1", "aria-hidden": "true" }, null);
       gripEl.addEventListener("pointerdown", onGripPointerDown);
+      // 最小化后只剩一条标题栏，点它（不拖动）就还原
+      gripEl.addEventListener("pointerup", function (event) {
+        if (event.button !== undefined && event.button !== 0) return;
+        if (drag !== null && drag.active === true) return;
+        if (minimized === true) setMinimized(false);
+      });
       gripEl.addEventListener("dblclick", function (event) {
         event.preventDefault();
+        if (minimized === true) {
+          setMinimized(false);
+          return;
+        }
         toggleMax();
       });
       panelEl.insertBefore(gripEl, panelEl.firstChild);
@@ -296,11 +331,9 @@ window.__ModuleLoader__.load({
       const naturalWidth = Math.round(parseFloat(computed.width) || rect.width) || rect.width;
       const naturalHeight = Math.round(parseFloat(computed.height) || rect.height) || rect.height;
 
-      if (mode === MODE_MAX || minimized === true || mode === MODE_DRAGGED) {
-        if (panelEl.getAttribute(ATTR_WIN) !== "1") panelEl.setAttribute(ATTR_WIN, "1");
-      } else if (panelEl.hasAttribute(ATTR_WIN)) {
-        panelEl.removeAttribute(ATTR_WIN);
-      }
+      // 接管标记：只要被接管就常驻（红绿灯、抓手、最小化规则的样式都挂在这个属性下，
+      // 它不随「正常/拖动/最大化」的模式变化而摘除）。
+      if (panelEl.getAttribute(ATTR_WIN) !== "1") panelEl.setAttribute(ATTR_WIN, "1");
 
       // ---- 最小化：只保留标题条
       if (minimized === true) {
@@ -400,7 +433,20 @@ window.__ModuleLoader__.load({
     }
 
     // ------------------------------------------------------------- 三个动作
+    /**
+     * 关窗：先记下面板当前占位，把面板藏起来，再走官方关闭路径。
+     *
+     * 为什么不能直接调 closeHandler：官方关闭是「React 里 setState」，
+     * 在真实宿主上要等一次提交才会从 DOM 摘掉面板，这中间的几十毫秒里
+     * 用户已经点回去了、或者又被别的事件重开，窗口就会「关不掉」。
+     * 所以先把面板从视觉上藏掉（visibility，保留布局，不影响官方的卸载测量）。
+     */
     function closeWindow() {
+      if (panelEl !== null) panelEl.style.setProperty("visibility", "hidden");
+      if (panelEl !== null && typeof panelEl.__dsrNativeClose === "function") {
+        panelEl.__dsrNativeClose();
+        return;
+      }
       if (typeof closeHandler === "function") {
         closeHandler();
         return;
@@ -560,6 +606,14 @@ window.__ModuleLoader__.load({
         panelEl.removeAttribute("data-dsh-rail-win-min");
         panelEl.removeAttribute("data-dsh-rail-win-max");
         panelEl.removeAttribute("data-shortcut-modal");
+        // 自己挂的私有字段要清掉，别留在宿主的 DOM 节点上
+        if (panelEl.__dsrNativeClose !== undefined) delete panelEl.__dsrNativeClose;
+        if (panelEl.style !== undefined) {
+          for (const prop of ["position", "left", "top", "right", "bottom", "width", "height", "max-width", "margin", "transform"]) {
+            panelEl.style.removeProperty(prop);
+          }
+          if ((panelEl.getAttribute("style") || "").trim().length === 0) panelEl.removeAttribute("style");
+        }
       }
       if (toggleEl !== null) {
         toggleEl.remove();
@@ -609,13 +663,17 @@ window.__ModuleLoader__.load({
       if (panel.getAttribute("data-shortcut-modal") !== "settings") panel.setAttribute("data-shortcut-modal", "settings");
 
       // 找标题区与按钮行：靠 grid-area，而不是靠哈希类名
+      // 官方模板形如 "VOzbGW_title VOzbGW_header"，前缀是构建哈希、每次发版都会变，
+      // 所以按子串认 cell：以 title / header 结尾的那一格就是我们要的。
       const descendants = panel.querySelectorAll("*");
       for (const node of descendants) {
         if (node.closest(TITLE_SEL) !== null) continue;
-        const area = window.getComputedStyle(node).gridArea || "";
-        const first = area.split(" ")[0];
-        if (titleEl === null && first === "title") titleEl = node;
-        else if (headerEl === null && first === "header") headerEl = node;
+        const area = (window.getComputedStyle(node).gridArea || "").trim();
+        const cells = area.length === 0 || area === "auto" ? [] : area.split(/\s+/);
+        for (const cell of cells) {
+          if (titleEl === null && /title$/i.test(cell)) titleEl = node;
+          else if (headerEl === null && /header$/i.test(cell)) headerEl = node;
+        }
         if (titleEl !== null && headerEl !== null) break;
       }
       if (titleEl === null) {
@@ -630,6 +688,12 @@ window.__ModuleLoader__.load({
         closeHandler = function () {
           nativeClose.click();
         };
+        // 记录在面板上：面板被重新挂载后按新节点重算，所以每次 adopt 都覆盖一次
+        panel.__dsrNativeClose = function () {
+          nativeClose.click();
+        };
+      } else if (panel.__dsrNativeClose !== undefined) {
+        delete panel.__dsrNativeClose;
       }
 
       ensureGrip();
@@ -678,6 +742,7 @@ window.__ModuleLoader__.load({
 
     function startWatch() {
       if (observer !== null) return;
+      startWatchFallback();
       if (typeof MutationObserver !== "function") return;
       observer = new MutationObserver(function (records) {
         for (const record of records) {
@@ -690,6 +755,20 @@ window.__ModuleLoader__.load({
         }
       });
       observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    /**
+     * 观察器之外的第二条发现路径：官方设置弹窗一挂载就派发 window 事件，
+     * 我们顺带听着。观察器负责通用兜底，这里保证「打开设置」这个动作本身零延迟。
+     */
+    const MOUNT_EVENT = "dsh-settings-mount";
+
+    function onMountEvent() {
+      schedule();
+    }
+
+    function startWatchFallback() {
+      window.addEventListener(MOUNT_EVENT, onMountEvent);
       window.addEventListener("resize", onResize);
       schedule();
     }
@@ -704,6 +783,7 @@ window.__ModuleLoader__.load({
         observer.disconnect();
         observer = null;
       }
+      window.removeEventListener(MOUNT_EVENT, onMountEvent);
       window.removeEventListener("resize", onResize);
       if (scheduleId !== 0) {
         window.cancelAnimationFrame(scheduleId);
@@ -732,11 +812,11 @@ window.__ModuleLoader__.load({
       installStyles();
       // 上一次挂载（宿主的 HMR 重新执行 bundle）留下的 DOM 由这里收走，
       // 否则会出现两套红绿灯叠在一起。
+      // 注意：这里不能 return —— 安装完必须 startWatch()，否则模块装载成功却永不接管。
       try {
         const previous = document[CLEANUP_KEY];
         document[CLEANUP_KEY] = dispose;
-        if (previous === dispose) return;
-        if (typeof previous === "function") previous();
+        if (typeof previous === "function" && previous !== dispose) previous();
         document[CLEANUP_KEY] = dispose;
       } catch (err) {
         pushError("接管旧实例失败：" + String(err));

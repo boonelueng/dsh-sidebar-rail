@@ -125,8 +125,11 @@ DSH 自带的设置弹窗是一块居中的固定面板，盖在遮罩上，只�
 - **最大化 = 铺满会话区**：左边界取左侧栏右缘（也就是竖轨和会话区让位之后的位置），右、上、下各留 8px；不会盖住左侧竖轨
 - 位置与状态存在 `localStorage` 的 `dsh-sidebar-rail.win.v1`
 - 拖动只写合成层 `transform`（`translate3d`）+ `requestAnimationFrame` 合帧，不触发布局重排；松手才写 `left / top`
+- **红绿灯的动作走 `pointerdown` 而不是 `click`**：官方弹窗用模态层在 document 上挂捕获阶段的指针监听（点面板外就关），挂进面板的外来按钮一旦被打断，`click` 可能走不完；按下即生效，不必等一次完整点击
 
 与官方布局的关系：模块不依赖任何哈希类名，只按 `grid-area` 认出「标题栏」和「关闭按钮区」，改写内联样式且**只写自己的属性**（`data-dsh-rail-win*`），关窗时原样撤掉，官方弹窗组件本身不动。找不到标题栏就整体退出，保持官方原样。
+
+grid-area 的识别方式是**按后缀**匹配：官方模板写作 `"VOzbGW_title VOzbGW_header"`，`VOzbGW_` 是构建哈希、每次发版都会变，所以只看每一格是否以 `title` / `header` 结尾。
 
 ## 开关与诊断
 
@@ -203,8 +206,9 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/probe-final.cjs` | 端到端回归：齿轮已消失、展开/收起、设置页里增 / 删 / 保存写回轨道、刷新后保持 |
 | `probes/drag-probe.cjs` | 拖拽排序：ghost / 半透明占位 / FLIP / `order` 变更 / 落盘 / 刷新还原 / 自定义条目重排 / 点击抑制 |
 | `probes/float-probe.cjs` | 悬浮：进出悬浮态、自动展开/停靠自动收起、抓手出现、`translate3d` 拖动、坐标夹取与落盘、**首次落位即写盘**、**三段无缝衔接（含刷新后与 nav 长高后）**、刷新还原、双击停靠、缩窗口不跑丢、**拖动无长任务** |
+| `probes/window-probe.cjs` | 设置窗口化：红绿灯位于右上角、三色与尺寸、拖动移动与落盘、最大化铺满会话区且不盖竖轨、最小化与点标题条还原、刷新后位置保持、红点隐藏窗口、**拖动无长任务** |
 
-`drag-probe.cjs` 与 `float-probe.cjs` 自带静态回归台 `probes/drag-harness.html`（复刻 DSH 侧边栏 DOM 骨架 + 加载真实 `client.js`），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
+`drag-probe.cjs`、`float-probe.cjs` 与 `window-probe.cjs` 自带静态回归台 `probes/drag-harness.html`（复刻 DSH 侧边栏与设置弹窗的 DOM 骨架 + 加载真实 `client.js`），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
 
 另有 `verify-drag.cjs`：在 Node `vm` 里用带布局模型的 DOM 桩加载 `client.js`，跑 24 项断言，纯逻辑层秒级回归，无需浏览器。
 

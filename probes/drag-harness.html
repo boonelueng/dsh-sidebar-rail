@@ -24,6 +24,31 @@
   .sessionRow { height: 32px; display: flex; align-items: center; padding: 0 8px;
                 border-radius: 8px; color: #333; }
   .footArea { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; }
+
+  /* ---- DSH 设置弹窗骨架（复刻 dsh-client-ui-settings-general 的 grid 结构与遮罩层） ---- */
+  .stOverlay { z-index: 1000; justify-content: center; align-items: center; display: flex;
+               position: fixed; inset: 0; }
+  .stMask { inset: 0; background: rgba(0,0,0,.28); position: absolute; }
+  .stPanel { z-index: 1; width: 800px; height: min(800px, calc(100vh - 48px));
+             border-radius: 12px; background: #fff; max-width: calc(100vw - 48px);
+             box-shadow: 0 12px 40px rgba(0,0,0,.18);
+             grid-template: "stTitle stHeader" "stNav stOptions" minmax(0,1fr) / 188px minmax(0,1fr);
+             display: grid; position: relative; overflow: hidden; }
+  .stNavTitle { grid-area: stTitle; padding: 22px 12px 8px 24px; font-size: 16px;
+                font-weight: 500; line-height: 24px; }
+  .stHeader { grid-area: stHeader; justify-content: space-between; align-items: flex-start;
+              gap: 8px; height: 54px; padding: 20px 14px 8px 10px; display: flex;
+              box-sizing: border-box; }
+  .stClose { border-radius: 6px; cursor: pointer; width: 28px; height: 28px; background: 0 0;
+             border: none; flex: none; display: inline-flex; justify-content: center;
+             align-items: center; padding: 0; }
+  .stNav { grid-area: stNav; padding: 0 8px 8px; }
+  .stNavList { display: flex; flex-direction: column; gap: 2px; }
+  .stNavCell { border: 0; background: transparent; border-radius: 8px; padding: 8px 12px;
+               text-align: left; font: inherit; cursor: pointer; }
+  .stNavCell[data-active="true"] { background: #ececec; }
+  .stOptions { grid-area: stOptions; min-width: 0; min-height: 0; padding: 0 24px 24px;
+               overflow-y: auto; }
 </style>
 </head>
 <body>
@@ -193,8 +218,67 @@
       grip: function () { return document.querySelector('[data-dsh-rail-grip]'); },
       root: function () { return document.querySelector('[data-dsh-rail-root]'); },
       navBox: function () { return document.querySelector('[data-dsh-rail-part="nav"]'); },
-      regionBox: function () { return document.querySelector('[data-dsh-rail-part="region"]'); }
+      regionBox: function () { return document.querySelector('[data-dsh-rail-part="region"]'); },
+
+      /* ---- 设置弹窗骨架：open / close 模拟 DSH 的 React 挂载与卸载 ---- */
+      openSettings: function () {
+        if (document.querySelector('[data-shortcut-modal="settings"]')) return true;
+        var overlay = document.createElement("div");
+        overlay.className = "stOverlay";
+        overlay.setAttribute("role", "presentation");
+        var mask = document.createElement("div");
+        mask.className = "stMask";
+        mask.setAttribute("aria-hidden", "true");
+        var panel = document.createElement("div");
+        panel.className = "stPanel";
+        panel.setAttribute("tabindex", "-1");
+        panel.setAttribute("data-shortcut-modal", "settings");
+        panel.setAttribute("role", "dialog");
+        panel.setAttribute("aria-modal", "true");
+        panel.innerHTML =
+          '<div class="stNavTitle" tabindex="-1" data-modal-autofocus>设置</div>' +
+          '<div class="stHeader"><div class="stActions"></div>' +
+          '<button class="stClose" type="button" aria-label="关闭"><svg width="14" height="14">' +
+          '<path d="M2 2l10 10M12 2L2 12" stroke="currentColor"/></svg>' +
+          '<span class="hiddenLabel">关闭</span></button></div>' +
+          '<nav class="stNav"><div class="stNavList">' +
+          '<button class="stNavCell" type="button" data-active="true">通用</button>' +
+          '<button class="stNavCell" type="button">侧边栏条目</button>' +
+          '</div></nav>' +
+          '<div class="stOptions"><p>设置内容区</p></div>';
+        overlay.appendChild(mask);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+        window.__HARNESS__.notifyMount();
+        return true;
+      },
+      closeSettings: function () {
+        var p = document.querySelector('[data-shortcut-modal="settings"]');
+        if (!p) return false;
+        var overlay = p.parentElement;
+        if (overlay) overlay.remove();
+        window.__HARNESS__.notifyMount();
+        return true;
+      },
+      settingsOpen: function () {
+        return document.querySelector('[data-shortcut-modal="settings"]') !== null;
+      },
+      panel: function () { return document.querySelector('[data-shortcut-modal="settings"]'); },
+      lights: function () { return document.querySelector('[data-dsh-rail-win-lights]'); },
+      /* 内核诊断对象是现成暴露的，探针直接读它来判断模块状态与错误 */
+      diag: function () { return window.__DSH_RAIL__ || null; },
+      /* 回归台里设置弹窗是我们自己挂上去的（真实宿主里由官方 React 挂载），
+         所以这里补一条「打开/关闭设置」的消息，等价官方挂载时的那一下通知。 */
+      notifyMount: function () {
+        document.dispatchEvent(new Event("dsh-settings-mount"));
+      }
     };
+    // 点官方遮罩 = 关窗（DSH 的真实行为，回归台也要有）
+    document.addEventListener("click", function (event) {
+      if (event.target && event.target.classList && event.target.classList.contains("stMask")) {
+        event.target.parentElement.remove();
+      }
+    });
   })();
 </script>
 </body>
