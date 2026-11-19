@@ -135,7 +135,7 @@ window.__ModuleLoader__.load({
     let drag = null;
     let dragRaf = 0;
     let dragPending = null;
-    // 松手后延迟恢复玻璃质感的 rAF 句柄（见 settleDragging 的说明）
+    // 松手后延迟撤 will-change 的 rAF 句柄（见 settleDragging 的说明）
     let settleRaf = 0;
     // 上一次量到的面板自然尺寸。落位那一帧要用它跳过 getComputedStyle，
     // 少一次强制同步布局 —— 详见 applyWindow 的 skipMeasure 参数。
@@ -937,8 +937,8 @@ window.__ModuleLoader__.load({
       // 在按下阶段就吞掉默认行为会连点击与选中一起废掉。
       // 真正开始拖（移动超过阈值）时才在 pointermove 里 preventDefault。
       //
-      // 上一次松手排的「恢复玻璃」回调还没跑就又按下：先撤掉。
-      // 否则它会在这一轮拖动中间把降级标记摘掉，模糊一回来就得重算，白卡一下。
+      // 上一次松手排的「撤 will-change」回调还没跑就又按下：先撤掉。
+      // 否则它会在这一轮拖动中间把图层提示撤掉、又立刻被重新置上，白折腾一次。
       cancelSettle();
       // 量一次面板当前位置：normal 态还没有 left/top，只能从 rect 取起点。
       const rect = roundRect(panelEl.getBoundingClientRect());
@@ -1029,7 +1029,7 @@ window.__ModuleLoader__.load({
       // 用拖动开始时量到的尺寸（拖动过程不改面板尺寸，这个值是准的）。
       applyWindow(true);
       clearDragTransform();
-      // 位置已经落定，再让玻璃质感回来（跨两帧，别和这一帧的重排抢）。
+      // 位置已经落定，下一帧再撤 will-change（跨两帧，别和这一帧的重排抢）。
       settleDragging();
       saveState();
     }
@@ -1039,7 +1039,7 @@ window.__ModuleLoader__.load({
       clearDragTransform();
       // 拖动中的话先把 window 上的临时监听摘掉，否则面板换了一个、旧监听还在跟手
       endDragListeners();
-      // 上一轮松手排的「恢复玻璃」回调要撤掉：面板已经是别人的了，
+      // 上一轮松手排的「撤 will-change」回调要撤掉：面板已经是别人的了，
       // 它跑起来会去摘一个已不存在的标记。
       cancelSettle();
       releasePanelDrag();
