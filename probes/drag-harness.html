@@ -279,6 +279,15 @@
         event.target.parentElement.remove();
       }
     });
+    // 点官方 × = 关窗（真实宿主里这个按钮带 React onClick，回归台补上等价行为，
+    // 否则「关闭」这条路径在回归台上永远走不通）
+    document.addEventListener("click", function (event) {
+      if (!event.target || !event.target.closest) return;
+      var btn = event.target.closest("button.stClose");
+      if (btn === null) return;
+      var panel = btn.closest('[data-shortcut-modal="settings"]');
+      if (panel && panel.parentElement) panel.parentElement.remove();
+    });
   })();
 </script>
 </body>

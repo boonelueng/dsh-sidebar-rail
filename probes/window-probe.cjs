@@ -168,6 +168,18 @@ async function main() {
         max: p && p.getAttribute('data-dsh-rail-win-max'),
         grip: box(document.querySelector('[data-dsh-rail-win-grip]')),
         header: box(document.querySelector('[data-dsh-rail-win-header]')),
+        // 左侧「设置」标题所在的格。这一格的盒子带着 22px 上内边距，直接取盒子中心
+        // 会算到整条 header 的中线上，所以按「上内边距 + 行高的一半」算出文字本身的中线，
+        // 才是要和圆点对齐的那条线。
+        title: box(document.querySelector('[data-dsh-rail-win-title]')),
+        titleCenterY: (() => {
+          const t = document.querySelector('[data-dsh-rail-win-title]');
+          if (!t) return null;
+          const cs = getComputedStyle(t);
+          const pt = parseFloat(cs.paddingTop) || 0;
+          const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) || 0;
+          return Math.round(t.getBoundingClientRect().y + pt + lh / 2);
+        })(),
         // 官方 × 必须是 header 的直系子按钮：红绿灯自己的 .dsr-light-close 也含 "close"，
         // 且住在 header 里面，用后代选择器会先命中它，断言就成了「红绿灯在自己左边」。
         // 属性值在 CSS 里大小写敏感，官方是 VOzbGW_close、回归台是 stClose，所以带 i 标志。
@@ -186,26 +198,38 @@ async function main() {
     await openSettings();
     result.steps.opened = await panelBox();
     const o = result.steps.opened;
-    check("设置弹窗打开后出现红绿灯", o.lights !== null, o.lights);
-    check("红绿灯有三个圆点", o.dots.length === 3, o.dots.map((d) => d.cls));
-    check("三个圆点都是 12px 圆形",
-      o.dots.length === 3 && o.dots.every((d) => d.w === 12 && d.h === 12 && d.radius === "50%"),
+    check("设置弹窗打开后出现窗口控制圆点", o.lights !== null, o.lights);
+    check("圆点只有两个（关闭交给官方 ×，不再造红点）", o.dots.length === 2, o.dots.map((d) => d.cls));
+    check("两个圆点都是 12px 圆形",
+      o.dots.length === 2 && o.dots.every((d) => d.w === 12 && d.h === 12 && d.radius === "50%"),
       o.dots.map((d) => d.w + "x" + d.h + " r=" + d.radius));
-    check("左→右顺序是 关闭(红) / 最小化(黄) / 最大化(绿)",
-      o.dots.length === 3 &&
-      o.dots[0].cls.indexOf("dsr-light-close") >= 0 && o.dots[0].bg === "rgb(255, 95, 87)" &&
-      o.dots[1].cls.indexOf("dsr-light-min") >= 0 && o.dots[1].bg === "rgb(254, 188, 46)" &&
-      o.dots[2].cls.indexOf("dsr-light-max") >= 0 && o.dots[2].bg === "rgb(40, 200, 64)",
+    check("左→右顺序是 最大化(绿) / 最小化(黄)",
+      o.dots.length === 2 &&
+      o.dots[0].cls.indexOf("dsr-light-max") >= 0 && o.dots[0].bg === "rgb(40, 200, 64)" &&
+      o.dots[1].cls.indexOf("dsr-light-min") >= 0 && o.dots[1].bg === "rgb(254, 188, 46)",
       o.dots.map((d) => d.cls + " " + d.bg));
-    check("红绿灯住在官方 header 行里（不再是飘在右上角的绝对定位）",
+    check("没有红点残留", o.dots.every((d) => d.cls.indexOf("dsr-light-close") < 0), o.dots.map((d) => d.cls));
+    check("圆点住在官方 header 行里（不再是飘在右上角的绝对定位）",
       o.lights !== null && o.header !== null &&
       o.lights.x >= o.header.x - 1 && o.lights.x + o.lights.w <= o.header.x + o.header.w + 1 &&
       o.lights.y >= o.header.y - 1 && o.lights.y + o.lights.h <= o.header.y + o.header.h + 1,
       { header: o.header, lights: o.lights });
-    check("红绿灯排在官方 × 的左边，不与之重叠",
+    check("圆点排在官方 × 的左边，不与之重叠",
       o.lights !== null && o.closeBtn !== null &&
       o.lights.x + o.lights.w <= o.closeBtn.x + 1,
       { lightsRight: o.lights ? o.lights.x + o.lights.w : null, closeBtnLeft: o.closeBtn ? o.closeBtn.x : null });
+    // 圆点只有 12px，官方 × 是 28px；两者垂直中心要落在同一条线上，
+    // 那条线也正好是左侧「设置」标题（22px padding + 24px 行高）的中线。
+    check("圆点与官方 × 垂直居中对齐（同一水平线）",
+      o.lights !== null && o.closeBtn !== null &&
+      Math.abs((o.lights.y + o.lights.h / 2) - (o.closeBtn.y + o.closeBtn.h / 2)) <= 2,
+      { lightsCenterY: o.lights ? o.lights.y + o.lights.h / 2 : null,
+        closeCenterY: o.closeBtn ? o.closeBtn.y + o.closeBtn.h / 2 : null });
+    check("圆点与左侧「设置」标题在同一水平线上",
+      o.lights !== null && o.titleCenterY !== null &&
+      Math.abs((o.lights.y + o.lights.h / 2) - o.titleCenterY) <= 3,
+      { lightsCenterY: o.lights ? o.lights.y + o.lights.h / 2 : null,
+        titleCenterY: o.titleCenterY });
     check("接管后打上了 data-dsh-rail-win", o.attr === "1", o.attr);
     check("拖动抓手存在", o.grip !== null, o.grip);
     await shot("shot-window-open.png");
@@ -235,7 +259,8 @@ async function main() {
     await shot("shot-window-dragged.png");
 
     // ------------------------------------------------ 3. 最大化：铺满会话区
-    const maxBtn = centerOf(d1.dots[2]);
+    // 圆点只有两个且顺序是「绿(最大化) / 黄(最小化)」，所以最大化取 dots[0]
+    const maxBtn = centerOf(d1.dots[0]);
     await mouse("mousePressed", maxBtn.x, maxBtn.y);
     await mouse("mouseReleased", maxBtn.x, maxBtn.y);
     await sleep(420);
@@ -255,7 +280,7 @@ async function main() {
     await shot("shot-window-max.png");
 
     // 再点一次回到原尺寸
-    const maxBtn2 = centerOf(m1.dots[2]);
+    const maxBtn2 = centerOf(m1.dots[0]);
     await mouse("mousePressed", maxBtn2.x, maxBtn2.y);
     await mouse("mouseReleased", maxBtn2.x, maxBtn2.y);
     await sleep(420);
@@ -268,8 +293,7 @@ async function main() {
 
     // ---------------------------------------------------------- 4. 最小化
     const u1 = result.steps.unmaximized;
-    const minBtn = centerOf(u1.dots[1]);
-    await mouse("mousePressed", minBtn.x, minBtn.y);
+    const minBtn = centerOf(u1.dots[1]);    await mouse("mousePressed", minBtn.x, minBtn.y);
     await mouse("mouseReleased", minBtn.x, minBtn.y);
     await sleep(420);
     result.steps.minimized = await panelBox();
@@ -309,14 +333,15 @@ async function main() {
       { now: result.steps.afterReload.panel, want: d1.panel });
 
     // -------------------------------------------------------- 6. 关闭按钮
+    // 关闭不再是我们造的红点，而是官方 header 里那个 × 图标按钮——点它必须真的关掉。
     const r1 = result.steps.afterReload;
-    const closeBtn = centerOf(r1.dots[0]);
+    const closeBtn = centerOf(r1.closeBtn);
     await mouse("mousePressed", closeBtn.x, closeBtn.y);
     await mouse("mouseReleased", closeBtn.x, closeBtn.y);
     await sleep(420);
     result.steps.closed = { open: await evalJs("window.__HARNESS__.settingsOpen()"), visible: await evalJs(`(() => { const p = window.__HARNESS__.panel(); if (!p) return false; const cs = getComputedStyle(p); return cs.visibility !== "hidden" && cs.display !== "none"; })()`) };
-    check("点红点关闭：窗口不可见（hidden 或已从 DOM 摘掉）", result.steps.closed.open === false || result.steps.closed.visible === false, result.steps.closed);
-    check("关闭后不残留红绿灯",
+    check("点官方 × 关闭：窗口不可见（hidden 或已从 DOM 摘掉）", result.steps.closed.open === false || result.steps.closed.visible === false, result.steps.closed);
+    check("关闭后不残留控制圆点",
       (await evalJs(`(() => { const l = window.__HARNESS__.lights(); if (!l) return true; const p = window.__HARNESS__.panel(); const cs = getComputedStyle(p); return cs.visibility === "hidden" || cs.display === "none"; })()`)) === true);
 
     // --------------------------------- 7. Esc 仍能关闭 + 无 diag 错误 + 无长任务

@@ -91,7 +91,6 @@ window.__ModuleLoader__.load({
     let drag = null;
     let dragRaf = 0;
     let dragPending = null;
-    let closeHandler = null;
 
     // ---------------------------------------------------------------- 持久化
     function loadState() {
@@ -146,12 +145,18 @@ window.__ModuleLoader__.load({
       "position:relative;z-index:2;",
       "}",
 
-      /* 红绿灯：排在官方 header 行里、官方 × 的左边。
-         官方 header 本身是 display:flex + align-items:flex-start，插进去就由 flex 排版，
-         所以这里只留静态流内样式——不再绝对定位到面板右上角，
-         否则会和官方那行「打开配置文件」+ × 叠在一起。 */
+      /* 窗口控制圆点：住在官方 header 行里、官方 × 的左边，由 header 的 flex 排版，
+         所以这里只留静态流内样式——不绝对定位到面板右上角，
+         否则会和官方那行「打开配置文件」+ × 叠在一起。
+         只有两个点：最小化（黄）在最右、最大化（绿）在左；关闭交给官方自己的 × 按钮，
+         所以不再造第三个红点。
+         纵向对齐：header 是 display:flex + align-items:flex-start，官方 × 有 28px 高，
+         它的垂直中心落在 20px(padding-top) + 14px 处，正好等于标题行
+         （22px padding-top + 24px 行高）的垂直中线。我们只有 12px 的圆点，
+         贴 flex-start 会比这条中线高出 8px，所以用 margin-top 补回来，
+         才能和左侧「设置」二字处在同一条水平线上。 */
       "[data-dsh-rail-win-lights]{",
-      "position:static;margin-left:auto;",
+      "position:static;margin-left:auto;margin-top:8px;align-self:flex-start;",
       "display:flex!important;align-items:center!important;gap:8px!important;",
       "z-index:auto;",
       "}",
@@ -163,7 +168,6 @@ window.__ModuleLoader__.load({
       "}",
       "@media (hover:hover){[data-dsh-rail-win-lights] .dsr-light:hover{filter:brightness(1.12)}}",
       "[data-dsh-rail-win-lights] .dsr-light:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#3b82f6);outline-offset:2px}",
-      "[data-dsh-rail-win-lights] .dsr-light-close{background:#ff5f57}",
       "[data-dsh-rail-win-lights] .dsr-light-min{background:#febc2e}",
       "[data-dsh-rail-win-lights] .dsr-light-max{background:#28c840}",
 
@@ -358,12 +362,15 @@ window.__ModuleLoader__.load({
         role: "group",
         "aria-label": "窗口控制",
       }, [
+        // 左→右 = 绿（最大化）/ 黄（最小化）/ 红（关闭）。
+        // 关闭不再造自己的红点：直接复排官方 header 里那个 × 图标按钮，
+        // 位置天然就在这两个圆点的右边，视觉上正好凑成「绿 黄 红」。
         el("button", {
           type: "button",
-          className: "dsr-light dsr-light-close",
-          "aria-label": "关闭设置",
-          title: "关闭",
-          "data-dsr-light": "close",
+          className: "dsr-light dsr-light-max",
+          "aria-label": "最大化设置",
+          title: "最大化 / 还原",
+          "data-dsr-light": "max",
         }, null),
         el("button", {
           type: "button",
@@ -372,20 +379,12 @@ window.__ModuleLoader__.load({
           title: "最小化",
           "data-dsr-light": "min",
         }, null),
-        el("button", {
-          type: "button",
-          className: "dsr-light dsr-light-max",
-          "aria-label": "最大化设置",
-          title: "最大化 / 还原",
-          "data-dsr-light": "max",
-        }, null),
       ]);
-      // 三个圆点统一走 bindLightAction：指针按下即生效，不依赖 click 是否走完
+      // 圆点统一走 bindLightAction：指针按下即生效，不依赖 click 是否走完
       const dots = lightsEl.querySelectorAll(".dsr-light");
-      if (dots.length === 3) {
-        bindLightAction(dots[0], closeWindow);
+      if (dots.length === 2) {
+        bindLightAction(dots[0], toggleMax);
         bindLightAction(dots[1], function () { setMinimized(!minimized); });
-        bindLightAction(dots[2], toggleMax);
       }
       // 挂进官方 header 行，排在官方 × 的左边——由 header 自己的 flex 排版，
       // 不再绝对定位，所以不会和「打开配置文件」+ × 叠在一起。
@@ -393,8 +392,8 @@ window.__ModuleLoader__.load({
       // 注意别挂进 header 里那个 actions 容器：它自己带 margin-left:auto，
       // 会把整组顶到最右，而官方 × 在 actions 外面，挂进去反而排到 × 的右边。
       // 官方 × 的 class 带构建哈希（VOzbGW_close），回归台是 stClose，
-      // 所以按子串 + 忽略大小写认；认不出就退到 header 里最后一个非红绿灯按钮
-      // （× 总是最后一个）。必须排掉红绿灯自己——.dsr-light-close 也含 "close"。
+      // 所以按子串 + 忽略大小写认；认不出就退到 header 里最后一个按钮
+      // （× 总是最后一个）。必须排掉圆点自己，别把自己当成官方 ×。
       if (headerEl !== null) {
         let closeBtn = null;
         const buttons = headerEl.querySelectorAll("button");
@@ -566,39 +565,18 @@ window.__ModuleLoader__.load({
 
     // ------------------------------------------------------------- 三个动作
     /**
-     * 关窗：走官方自己的关闭路径。
+     * 关闭：现在完全交给官方 header 里那个 × 图标按钮。
      *
+     * 这里留一段说明，记着为什么不再自己造一个红点去「点一下关闭」：
      * 官方设置弹窗的关闭处理器只挂在两处（见 dsh-client-ui-settings-general 的
-     * SettingsPanel）：遮罩 div.mask[aria-hidden="true"] 的 onClick，以及 header 里
-     * 那个 button.close。overlay 本身没有任何 React 处理器——往 overlay 上派发 click
+     * SettingsPanel）——遮罩 div.mask[aria-hidden="true"] 的 onClick，以及 header 里
+     * 那个 button.close。overlay 本身没有任何 React 处理器，往 overlay 上派发 click
      * 是打空的，这正是旧版「点红灯后页面残留一层黑色遮罩」的原因：面板被
      * visibility:hidden 藏掉了，但 overlay + mask 还在，于是整页被蒙上一层黑。
      *
-     * 所以这里按「遮罩 → 官方 × → 兜底」的顺序派发真实 click，让 React 自己卸载整个
-     * overlay。不再自己藏面板：半截操作会留下这层黑。
+     * 我们的圆点只负责最大化（绿）与最小化（黄）；关闭由用户直接点官方 ×，
+     * 走的是 React 自己的路径，天然不会留下黑层。
      */
-    function closeWindow() {
-      // 1) 遮罩：官方唯一挂在「点外面关闭」上的处理器
-      if (overlayEl !== null) {
-        let mask = overlayEl.querySelector('[aria-hidden="true"]');
-        if (mask === null) mask = overlayEl.querySelector('[class*="mask"]');
-        if (mask !== null) {
-          mask.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-          return;
-        }
-      }
-      // 2) 官方右上角那个 × 按钮
-      if (panelEl !== null) {
-        let nativeClose = panelEl.querySelector('button[class*="close"]');
-        if (nativeClose === null) nativeClose = findNativeCloseButton();
-        if (nativeClose !== null) {
-          nativeClose.click();
-          return;
-        }
-      }
-      // 3) 最后才是记下来的关闭回调（它内部也是点同一个 ×）
-      if (typeof closeHandler === "function") closeHandler();
-    }
 
     function setMinimized(next) {
       const want = next === true;
@@ -754,9 +732,9 @@ window.__ModuleLoader__.load({
         panelEl.removeAttribute(ATTR_WIN);
         panelEl.removeAttribute("data-dsh-rail-win-min");
         panelEl.removeAttribute("data-dsh-rail-win-max");
-        panelEl.removeAttribute("data-shortcut-modal");
-        // 自己挂的私有字段要清掉，别留在宿主的 DOM 节点上
-        if (panelEl.__dsrNativeClose !== undefined) delete panelEl.__dsrNativeClose;
+        // 注意：不能摘 data-shortcut-modal —— 那是官方自己的标记，
+        // 摘掉之后 tick() 里的 querySelector(PANEL_SEL) 就再也找不到这个面板，
+        // 模块会误判成「面板已关闭」而永久退出接管。
         if (panelEl.style !== undefined) {
           for (const prop of ["position", "left", "top", "right", "bottom", "width", "height", "max-width", "margin", "transform"]) {
             panelEl.style.removeProperty(prop);
@@ -773,26 +751,7 @@ window.__ModuleLoader__.load({
       overlayEl = null;
       titleEl = null;
       headerEl = null;
-      closeHandler = null;
       drag = null;
-    }
-
-    function findNativeCloseButton() {
-      if (panelEl === null) return null;
-      const buttons = panelEl.querySelectorAll("button");
-      for (const btn of buttons) {
-        // 官方关闭按钮：唯一一个「没有文字、但里面有 svg」且位于 header 区的按钮
-        if (headerEl !== null && !headerEl.contains(btn)) continue;
-        if ((btn.textContent || "").trim().length > 0) continue;
-        if (btn.querySelector("svg") === null) continue;
-        if (btn.getAttribute("aria-label") || btn.getAttribute("title")) {
-          // 有明确无障碍名字的按钮多半是别的功能，跳过
-          const name = (btn.getAttribute("aria-label") || btn.getAttribute("title") || "").toLowerCase();
-          if (!/close|关闭/.test(name)) continue;
-        }
-        return btn;
-      }
-      return null;
     }
 
     /**
@@ -840,21 +799,8 @@ window.__ModuleLoader__.load({
         return;
       }
       titleEl.setAttribute("data-dsh-rail-win-title", "1");
-      // 红绿灯要住进 header 行：先给它打上标记，样式表按这个属性把 header 抬到抓手之上
+      // 圆点要住进 header 行：先给它打上标记，样式表按这个属性把 header 抬到抓手之上
       if (headerEl !== null) headerEl.setAttribute(ATTR_HEADER, "1");
-
-      const nativeClose = findNativeCloseButton();
-      if (nativeClose !== null) {
-        closeHandler = function () {
-          nativeClose.click();
-        };
-        // 记录在面板上：面板被重新挂载后按新节点重算，所以每次 adopt 都覆盖一次
-        panel.__dsrNativeClose = function () {
-          nativeClose.click();
-        };
-      } else if (panel.__dsrNativeClose !== undefined) {
-        delete panel.__dsrNativeClose;
-      }
 
       ensureGrip();
       ensureLights();

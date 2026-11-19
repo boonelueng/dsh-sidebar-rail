@@ -183,9 +183,11 @@ async function main() {
       return {
         panel: box(p),
         hasLights: lights !== null && lights !== undefined,
+        // 关闭不再有自己的圆点（交给官方 ×），所以这里只认黄点与绿点
         close: dot('.dsr-light-close'),
         min: dot('.dsr-light-min'),
         max: dot('.dsr-light-max'),
+        dotCount: lights ? lights.querySelectorAll('.dsr-light').length : 0,
         attr: p && p.getAttribute('data-dsh-rail-win'),
         minAttr: p && p.getAttribute('data-dsh-rail-win-min'),
         maxAttr: p && p.getAttribute('data-dsh-rail-win-max'),
@@ -254,7 +256,10 @@ async function main() {
 
     await clickFeature("lights");
     const p3 = await panelBox();
-    check("重新打开红绿灯后按钮回来", p3 && p3.hasLights === true && p3.close !== null, p3 && { hasLights: p3.hasLights });
+    check("重新打开红绿灯后圆点回来（黄 + 绿两个）",
+      p3 && p3.hasLights === true && p3.dotCount === 2 && p3.min !== null && p3.max !== null,
+      p3 && { hasLights: p3.hasLights, dotCount: p3.dotCount });
+    check("圆点里没有红点（关闭交给官方 ×）", p3 && p3.close === null, p3 && { close: p3.close });
 
     // 键盘也能切：Enter 等价点一下
     const kb = await evalJs(`(() => {
