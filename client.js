@@ -29,6 +29,7 @@ window.__ModuleLoader__.load({
     const STORAGE_EXPANDED = "dsh-sidebar-rail.railExpanded.v1";
     const STORAGE_NAV_ORDER = "dsh-sidebar-rail.navOrder.v1";
     const STORAGE_FLOAT = "dsh-sidebar-rail.float.v1";
+    const STORAGE_FEATURES = "dsh-sidebar-rail.features.v1";
     const ATTR_FLOAT = "data-dsh-rail-float";
     const SETTINGS_SECTION = "settings.section";
     const SETTINGS_SECTION_ID = "dsh-sidebar-rail.settings";
@@ -147,6 +148,114 @@ window.__ModuleLoader__.load({
       return floatOn;
     }
 
+    // --------------------------------------------------------- feature switches
+    /**
+     * 功能开关：每个可选功能一个条目，独立启停、独立持久化。
+     *
+     * 设计：开关状态归内核管（模块只读），这样任何一个模块缺席或抛错都不会让
+     * 其他开关失效；关掉的功能在模块内部短路——不建 DOM、不绑事件、入口早退。
+     * 默认全开：与本插件此前的行为一致，用户不动开关就什么都不会变。
+     *
+     * 生效方式：保存后立即写 localStorage 并就地应用（不需要刷新）；红绿灯与
+     * 最大化还会顺手把已经处于该状态的面板复位，避免留下半截状态。
+     */
+    const FEATURES = [
+      {
+        key: "lights",
+        label: "窗口红绿灯",
+        desc: "设置窗口右上角的关闭 / 最小化 / 最大化三个圆点",
+      },
+      {
+        key: "drag",
+        label: "按住标题栏拖动",
+        desc: "按住设置窗口顶部标题栏，把它拖到任意位置",
+      },
+      {
+        key: "restore",
+        label: "点标题条还原",
+        desc: "最小化收成一条后，点那条标题栏展开回来",
+      },
+      {
+        key: "maximize",
+        label: "最大化铺满会话区",
+        desc: "绿色圆点让设置窗口铺满右侧会话区，再点还原",
+      },
+    ];
+
+    const FEATURE_KEYS = FEATURES.map(function (item) {
+      return item.key;
+    });
+
+    /** 开关状态：缺省全开；读盘失败也当全开（宁可保持旧行为，不要突然少功能） */
+    const featureState = {};
+    FEATURE_KEYS.forEach(function (key) {
+      featureState[key] = true;
+    });
+
+    function loadFeatures() {
+      let saved = null;
+      try {
+        const raw = window.localStorage.getItem(STORAGE_FEATURES);
+        if (raw !== null && raw !== "") saved = JSON.parse(raw);
+      } catch (err) {
+        saved = null;
+      }
+      if (saved !== null && typeof saved === "object") {
+        FEATURE_KEYS.forEach(function (key) {
+          if (typeof saved[key] === "boolean") featureState[key] = saved[key];
+        });
+      }
+      // 即使没读过盘也要留一份快照：控制台核对与回归脚本都靠它看当前开关状态。
+      diag.features = featureSnapshot();
+    }
+
+    function saveFeatures() {
+      const out = {};
+      FEATURE_KEYS.forEach(function (key) {
+        out[key] = featureState[key] === true;
+      });
+      try {
+        window.localStorage.setItem(STORAGE_FEATURES, JSON.stringify(out));
+      } catch (err) {
+        diag.errors.push("features-save: " + String(err));
+      }
+    }
+
+    /** 读开关：未知名字一律返回 false（当作「没有这个功能」） */
+    function getFeature(name) {
+      if (typeof name !== "string") return false;
+      if (FEATURE_KEYS.indexOf(name) < 0) return false;
+      return featureState[name] === true;
+    }
+
+    /**
+     * 写开关：状态变了才落盘，并把改动通知到模块。
+     * 模块可以选择实现 onFeaturesChanged(next) 做就地应用；没实现就只更新状态，
+     * 下次面板重建时自然按新开关工作。
+     */
+    function setFeature(name, on) {
+      if (typeof name !== "string" || FEATURE_KEYS.indexOf(name) < 0) return false;
+      const want = on === true;
+      if (featureState[name] === want) return true;
+      featureState[name] = want;
+      saveFeatures();
+      diag.features = featureSnapshot();
+      // 通知各模块：模块可能正挂着不该挂的 DOM，让它们自己收尾。
+      Object.keys(modules).forEach(function (key) {
+        if (modules[key] === null) return;
+        callModule(key, "onFeaturesChanged", [featureSnapshot()], undefined);
+      });
+      return true;
+    }
+
+    function featureSnapshot() {
+      const out = {};
+      FEATURE_KEYS.forEach(function (key) {
+        out[key] = featureState[key] === true;
+      });
+      return out;
+    }
+
     /** 内核给模块的最小接口（模块只认这份契约，不碰内核闭包） */
     const moduleApi = {
       diag: diag,
@@ -187,6 +296,11 @@ window.__ModuleLoader__.load({
         return railWidthPx;
       },
       setVar: setVar,
+      STORAGE_FEATURES: STORAGE_FEATURES,
+      FEATURES: FEATURES,
+      getFeature: getFeature,
+      setFeature: setFeature,
+      featureSnapshot: featureSnapshot,
     };
 
     /** 展开/收起：归内核管，模块只能通过这个口子请求（悬浮时自动展开就靠它） */
@@ -739,6 +853,32 @@ window.__ModuleLoader__.load({
       ".dsr-settings .dsr-primary{background:var(--dsw-alias-state-business-primary);",
       "border-color:var(--dsw-alias-state-business-primary)}",
 
+      /* 设置页里的功能开关：一行一个，左边名称+说明，右边拨动开关 */
+      ".dsr-settings .dsr-switches{display:flex;flex-direction:column;gap:2px;",
+      "border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));border-radius:8px;",
+      "padding:2px 10px;margin:2px 0 4px}",
+      ".dsr-settings .dsr-switch{display:flex;align-items:center;gap:12px;padding:8px 0;",
+      "cursor:pointer;user-select:none}",
+      ".dsr-settings .dsr-switch + .dsr-switch{",
+      "border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))}",
+      ".dsr-settings .dsr-switch-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}",
+      ".dsr-settings .dsr-switch-label{color:var(--dsw-alias-label-primary);font-weight:500}",
+      ".dsr-settings .dsr-switch-desc{color:var(--dsw-alias-label-secondary);font-size:11.5px}",
+      /* 轨道与滑块都自己画，避免依赖 DSH 内部的 switch 实现 */
+      ".dsr-settings .dsr-switch-track{flex:none;position:relative;width:34px;height:20px;",
+      "border-radius:999px;background:var(--dsw-alias-fill-l3,rgba(0,0,0,.14));",
+      "transition:background .16s ease}",
+      ".dsr-settings .dsr-switch[data-on=\"1\"] .dsr-switch-track{",
+      "background:var(--dsw-alias-state-business-primary,#1a4bd8)}",
+      ".dsr-settings .dsr-switch-knob{position:absolute;top:2px;left:2px;width:16px;height:16px;",
+      "border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);",
+      "transition:transform .16s ease}",
+      ".dsr-settings .dsr-switch[data-on=\"1\"] .dsr-switch-knob{transform:translateX(14px)}",
+      ".dsr-settings .dsr-switch:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#1a4bd8);",
+      "outline-offset:2px;border-radius:6px}",
+      /* 功能被关掉时那一段说明降到次要色，一眼能看出「已停用」 */
+      ".dsr-settings .dsr-switch[data-on=\"0\"] .dsr-switch-label{color:var(--dsw-alias-label-secondary)}",
+
       /* 编辑器 */
       ".dsr-mask{position:fixed;inset:0;z-index:2147483000;background:rgba(20,20,20,.28);",
       "display:flex;align-items:center;justify-content:center;padding:24px}",
@@ -1272,6 +1412,7 @@ window.__ModuleLoader__.load({
 
       loadEntries();
       loadRailExpanded();
+      loadFeatures();
       stylesDispose = installStyles();
 
       // 可选模块装配放在最前：拖拽顺序、悬浮偏好、设置页草稿都要在首次 sync 之前就绪，

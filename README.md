@@ -131,6 +131,25 @@ DSH 自带的设置弹窗是一块居中的固定面板，盖在遮罩上，只�
 
 grid-area 的识别方式是**按后缀**匹配：官方模板写作 `"VOzbGW_title VOzbGW_header"`，`VOzbGW_` 是构建哈希、每次发版都会变，所以只看每一格是否以 `title` / `header` 结尾。
 
+### 四个功能各自可关
+
+窗口化的四个行为拆成四个独立开关，放在**设置 → 侧边栏条目**这一节的最上面（条目列表之上），随时可以单独关掉：
+
+| 开关 | 键 | 关掉之后 |
+| --- | --- | --- |
+| 窗口红绿灯 | `lights` | 右上角三个圆点整组消失，其余窗口行为照旧 |
+| 按住标题栏拖动 | `drag` | 标题栏还在，但按住不再移动窗口 |
+| 点标题条还原 | `restore` | 黄点被禁用（提示「需先开启」），不会最小化 |
+| 最大化铺满会话区 | `maximize` | 绿点被禁用，不会再铺满 |
+
+三个设计要点：
+
+- **保存即生效，不用刷新。** 点开关 → 写 `localStorage` 的 `dsh-sidebar-rail.features.v1` → 内核把新状态推给已加载的模块 → 模块就地收拾自己挂的 DOM（`client.window.js` 的 `onFeaturesChanged`）。红绿灯会当场拆掉或重建；拖动会解绑 / 重新绑定；如果关掉某个开关时窗口正处在它造成的位置上（最小化 / 最大化），会先把窗口复位再改。
+- **还原关掉时直接禁用黄点，而不是「最小化后还原不了」。** 没有还原路径的最小化是单向门——窗口收成一条之后就再也点不回来，而「设置」本身就在这个窗口里。所以宁可不让最小化。
+- **开关自己不能放在轨道上。** 这些开关管的就是设置窗口本身的行为；如果红绿灯关掉后入口在轨道上，用户反而更难找回来。放在设置页里，关掉什么都能自己打开。
+
+默认四个全开，与此前的行为一致。存档里缺字段、或读到脏数据，都按「开」处理，不会因为一个坏字段把功能锁死。
+
 ## 开关与诊断
 
 临时关掉全部改动（只留诊断）：
@@ -153,13 +172,14 @@ localStorage.removeItem('dsh-sidebar-rail:off')
 { loaded, version, tagged, disabled,
   anchors: { root, nav, region, logo, foot, newButton },
   custom, entries, hasInput, expanded, floating, floatPos,
-  settingsSection, errors }
+  settingsSection, features, errors }
 ```
 
 - `tagged: true` 表示已成功接管布局
 - `disabled: 'collapsed' | 'switch' | null` 表示当前为什么没接管
 - `anchors` 里哪一项是 `false`，就是那个锚点没找到
 - `floating` / `floatPos` 是当前悬浮态与落位坐标
+- `features` 是四个功能开关的当前状态（`{ lights, drag, restore, maximize }`）
 - `errors` 里是运行期异常
 
 ## 安装
@@ -207,8 +227,9 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/drag-probe.cjs` | 拖拽排序：ghost / 半透明占位 / FLIP / `order` 变更 / 落盘 / 刷新还原 / 自定义条目重排 / 点击抑制 |
 | `probes/float-probe.cjs` | 悬浮：进出悬浮态、自动展开/停靠自动收起、抓手出现、`translate3d` 拖动、坐标夹取与落盘、**首次落位即写盘**、**三段无缝衔接（含刷新后与 nav 长高后）**、刷新还原、双击停靠、缩窗口不跑丢、**拖动无长任务** |
 | `probes/window-probe.cjs` | 设置窗口化：红绿灯位于右上角、三色与尺寸、拖动移动与落盘、最大化铺满会话区且不盖竖轨、最小化与点标题条还原、刷新后位置保持、红点隐藏窗口、**拖动无长任务** |
+| `probes/features-probe.cjs` | 功能开关：四行渲染与默认全开、关红绿灯后整组消失、关还原后黄点被禁用且点不动、关最大化后绿点被禁用且点不动、关拖动后窗口不动、**关掉再打开全部恢复**、刷新后四项状态原样恢复、键盘 Enter 可切换、诊断无异常 |
 
-`drag-probe.cjs`、`float-probe.cjs` 与 `window-probe.cjs` 自带静态回归台 `probes/drag-harness.html`（复刻 DSH 侧边栏与设置弹窗的 DOM 骨架 + 加载真实 `client.js`），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
+`drag-probe.cjs`、`float-probe.cjs`、`window-probe.cjs` 与 `features-probe.cjs` 自带静态回归台（`probes/drag-harness.html` 复刻 DSH 侧边栏与设置弹窗的 DOM 骨架 + 加载真实 `client.js`；`probes/features-harness.html` 在此基础上加了 `react` 桩与 `slots.inject` 留档，好让设置页那一节真能被挂起来），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
 
 另有 `verify-drag.cjs`：在 Node `vm` 里用带布局模型的 DOM 桩加载 `client.js`，跑 24 项断言，纯逻辑层秒级回归，无需浏览器。
 
@@ -239,7 +260,9 @@ node verify-modules.cjs
 | `client.drag.js` | 轨道图标与自定义条目的鼠标拖拽排序（FLIP） | 面板图标退回原生顺序，仍可点击 |
 | `client.float.js` | 竖轨整体悬浮、拖动、双击停靠、自动展开/收起 | 轨道上不出现「悬浮」按钮，其余照常 |
 | `client.settings.js` | 条目编辑（DSH 设置页一节 + 内联弹层 + 导入导出） | 设置页里那一节空白，条目仍按默认两条渲染 |
-| `client.window.js` | 设置弹窗窗口化：拖拽移动、红绿灯（关闭 / 最小化 / 最大化） | 设置弹窗退回官方原样 |
+| `client.window.js` | 设置弹窗窗口化：拖拽移动、红绿灯（关闭 / 最小化 / 最大化），以及四个功能开关的就地启停 | 设置弹窗退回官方原样 |
+
+功能开关本身住在内核（`client.js` 的 `FEATURES` / `featureState` / `getFeature` / `setFeature`），不由模块持有：状态要能跨模块共享，也要能在模块缺席时照样读得到。`client.settings.js` 只负责把它们画成开关，`client.window.js` 只负责按状态干活。
 
 模块之间**不互相 import**，只认内核给的一份最小接口（`moduleApi`）。内核装配模块时逐个 `try/catch`：某个 chunk 404、factory 抛错、`install()` 抛错，都只把该模块置空并往 `diag.errors` 写一条 `module <key>: <reason>`，其余模块与布局完全不受影响。
 

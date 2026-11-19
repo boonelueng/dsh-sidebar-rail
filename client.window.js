@@ -34,6 +34,22 @@ window.__ModuleLoader__.load({
       if (api !== null && typeof api.pushError === "function") api.pushError("window: " + message);
     }
 
+    /**
+     * 读一个功能开关。
+     *
+     * 四个功能（红绿灯 / 标题栏拖动 / 点标题条还原 / 最大化铺满）各自独立开关，
+     * 都在 DSH 设置页「侧边栏条目」里。拿不到内核状态时一律当「开」：
+     * 内核没暴露开关（老版本内核）或读取抛错时，宁可保持旧行为，也不要突然少功能。
+     */
+    function featureOn(name) {
+      if (api === null || typeof api.getFeature !== "function") return true;
+      try {
+        return api.getFeature(name) === true;
+      } catch (err) {
+        return true;
+      }
+    }
+
     // ------------------------------------------------------------------- 常量
     const ATTR_WIN = "data-dsh-rail-win";
     const ATTR_GRIP = "data-dsh-rail-win-grip";
@@ -248,7 +264,52 @@ window.__ModuleLoader__.load({
     }
 
     // ------------------------------------------------------------------ 渲染
+
+    /**
+     * 圆点的可用性跟着对应的功能开关走。
+     *
+     * 黄点没有还原路径时是个单向门：窗口收成一条之后就再也点不开了
+     * （设置页本身就在这个窗口里，用户没法进来把开关改回去）。
+     * 所以还原关掉时干脆不让最小化，而不是留一个进去出不来的坑。
+     * 绿点同理：最大化关掉时把它标成禁用，比留一个点了没反应的按钮诚实。
+     */
+    function syncDots() {
+      if (lightsEl === null) return;
+      const minDot = lightsEl.querySelector(".dsr-light-min");
+      if (minDot !== null) {
+        if (featureOn("restore")) {
+          minDot.removeAttribute("aria-disabled");
+          minDot.removeAttribute("disabled");
+          minDot.setAttribute("title", "最小化");
+        } else {
+          minDot.setAttribute("aria-disabled", "true");
+          minDot.setAttribute("disabled", "disabled");
+          minDot.setAttribute("title", "最小化（需先开启「点标题条还原」）");
+        }
+      }
+      const maxDot = lightsEl.querySelector(".dsr-light-max");
+      if (maxDot !== null) {
+        if (featureOn("maximize")) {
+          maxDot.removeAttribute("aria-disabled");
+          maxDot.removeAttribute("disabled");
+          maxDot.setAttribute("title", "最大化 / 还原");
+        } else {
+          maxDot.setAttribute("aria-disabled", "true");
+          maxDot.setAttribute("disabled", "disabled");
+          maxDot.setAttribute("title", "最大化（已在设置里关闭）");
+        }
+      }
+    }
+
     function ensureLights() {
+      // 「窗口红绿灯」关掉时这组按钮根本不存在；已经建好的由 onFeaturesChanged 摘掉。
+      if (!featureOn("lights")) {
+        if (lightsEl !== null) {
+          lightsEl.remove();
+          lightsEl = null;
+        }
+        return;
+      }
       // 已连在面板上就什么都不用做；脱离（面板被宿主重挂载）就整组重建，
       // 重建后下面会重新挂一遍动作处理。
       if (lightsEl !== null && lightsEl.isConnected) return;
@@ -287,20 +348,24 @@ window.__ModuleLoader__.load({
         bindLightAction(dots[2], toggleMax);
       }
       panelEl.appendChild(lightsEl);
+      syncDots();
     }
 
     function ensureGrip() {
       if (gripEl !== null && gripEl.isConnected) return;
       gripEl = el("div", { "data-dsh-rail-win-grip": "1", "aria-hidden": "true" }, null);
-      gripEl.addEventListener("pointerdown", onGripPointerDown);
+      // 拖动关掉时这根条还在（最小化后它是要点的那条标题栏），只是不再响应拖动
+      if (featureOn("drag")) gripEl.addEventListener("pointerdown", onGripPointerDown);
       // 最小化后只剩一条标题栏，点它（不拖动）就还原
       gripEl.addEventListener("pointerup", function (event) {
         if (event.button !== undefined && event.button !== 0) return;
         if (drag !== null && drag.active === true) return;
+        if (!featureOn("restore")) return;
         if (minimized === true) setMinimized(false);
       });
       gripEl.addEventListener("dblclick", function (event) {
         event.preventDefault();
+        if (!featureOn("restore") && minimized === true) return;
         if (minimized === true) {
           setMinimized(false);
           return;
@@ -460,6 +525,8 @@ window.__ModuleLoader__.load({
 
     function setMinimized(next) {
       const want = next === true;
+      // 「点标题条还原」关掉时不允许最小化：见 syncDots 的说明，那是单向门。
+      if (want && !featureOn("restore")) return;
       if (minimized === want) return;
       minimized = want;
       saveState();
@@ -485,6 +552,8 @@ window.__ModuleLoader__.load({
     }
 
     function toggleMax() {
+      // 「最大化铺满会话区」关掉时绿点整体失效（见 syncDots）
+      if (!featureOn("maximize")) return;
       if (minimized === true) {
         setMinimized(false);
         mode = MODE_MAX;
@@ -533,6 +602,7 @@ window.__ModuleLoader__.load({
         sx: p.x,
         sy: p.y,
         active: false,
+        pointerId: event.pointerId,
       };
       dragPending = null;
       try {
@@ -847,8 +917,62 @@ window.__ModuleLoader__.load({
       startWatch();
     }
 
+    /**
+     * 开关变化时就地收敛，而不是等下一次重开设置窗口。
+     *
+     * 为什么必须现在做：这几个开关都挂在「设置窗口本身」上，用户刚在窗口里
+     * 关掉红绿灯，如果还要重开窗口才生效，他会以为没生效而反复点。
+     * 每条都只做必要的复位，不重建整个面板。
+     */
+    function onFeaturesChanged(next) {
+      if (panelEl === null) return;
+      // 红绿灯：关掉就整组摘掉，开回来就补建（ensureLights 自己会判断）
+      if (!featureOn("lights")) {
+        if (lightsEl !== null) {
+          lightsEl.remove();
+          lightsEl = null;
+        }
+      } else {
+        ensureLights();
+      }
+      // 拖动：绑定是建 DOM 时定的，改开关只能重建这根条；条本身要留着
+      if (gripEl !== null) {
+        const dragging = drag !== null;
+        if (dragging) {
+          try {
+            gripEl.releasePointerCapture(drag.pointerId);
+          } catch (err) {
+            // 忽略：没有捕获或已释放
+          }
+          drag = null;
+          dragPending = null;
+          if (dragRaf !== 0) {
+            window.cancelAnimationFrame(dragRaf);
+            dragRaf = 0;
+          }
+          document.body.classList.remove("dsr-win-dragging");
+          clearDragTransform();
+        }
+        gripEl.remove();
+        gripEl = null;
+        ensureGrip();
+      }
+      // 还原：关掉时不能停在最小化状态，否则窗口就卡在一条里出不来了
+      if (!featureOn("restore") && minimized === true) {
+        setMinimized(false);
+      }
+      // 最大化：关掉时若正铺满，退回原来的摆放
+      if (!featureOn("maximize") && mode === MODE_MAX) {
+        mode = posX === 0 && posY === 0 ? MODE_NORMAL : MODE_DRAGGED;
+        saveState();
+        applyWindow();
+      }
+      syncDots();
+    }
+
     exports.install = install;
     exports.dispose = dispose;
+    exports.onFeaturesChanged = onFeaturesChanged;
     /** 供内核诊断读：当前窗口状态快照 */
     exports.state = function () {
       return { mode: mode, minimized: minimized === true, x: posX, y: posY, attached: panelEl !== null };

@@ -10,6 +10,7 @@ probe-final-result.json
 drag-probe-result.json
 float-probe-result.json
 window-probe-result.json
+features-probe-result.json
 verify-drag-result.json
 shot-*.png
 .probe-chrome-profile*/

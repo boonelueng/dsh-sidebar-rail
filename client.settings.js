@@ -184,11 +184,62 @@ window.__ModuleLoader__.load({
           ),
         ])
       );
+      // 功能开关只在「条目列表」视图里出现：编辑单条时界面要收窄，别把开关混进表单
+      if (editIndex === null) wrap.appendChild(featuresView());
       const body = el("div", { className: "dsr-body" }, null);
       body.appendChild(editIndex === null ? listView() : formView());
       wrap.appendChild(body);
       wrap.appendChild(footView());
       settingsHost.appendChild(wrap);
+    }
+
+    // ------------------------------------------------------------ feature switches
+    /**
+     * 功能开关区块：一个开关一行，改动立即生效并写进本机。
+     *
+     * 为什么在设置页里而不是在轨道上：这些开关管的是「设置窗口本身」的行为，
+     * 放在设置窗口里改最符合直觉；而且关掉红绿灯之后如果入口在轨道上，用户
+     * 反而更难找回来。
+     *
+     * 关闭后的表现由各模块自己负责（模块内部短路），本区块只负责读写状态。
+     * 关掉的功能条目仍然留在列表里，随时可以再打开。
+     */
+    function featuresView() {
+      const list = api.FEATURES;
+      if (!Array.isArray(list) || list.length === 0) return el("div", {}, null);
+      const box = el("div", { className: "dsr-switches" }, null);
+      list.forEach(function (item) {
+        const on = api.getFeature(item.key) === true;
+        const row = el("div", { className: "dsr-switch", role: "switch", tabindex: "0" }, [
+          el("div", { className: "dsr-switch-text" }, [
+            el("div", { className: "dsr-switch-label", text: item.label }, null),
+            el("div", { className: "dsr-switch-desc", text: item.desc }, null),
+          ]),
+          el("div", { className: "dsr-switch-track" }, [el("div", { className: "dsr-switch-knob" }, null)]),
+        ]);
+        row.setAttribute("data-on", on ? "1" : "0");
+        row.setAttribute("aria-checked", on ? "true" : "false");
+        row.setAttribute("aria-label", item.label);
+        row.setAttribute("data-feature", item.key);
+
+        const toggle = function () {
+          const next = api.getFeature(item.key) !== true;
+          api.setFeature(item.key, next);
+          // 整块重渲染：开关外观与「已停用」的次要色都由 data-on 驱动
+          renderSettingsPanel();
+        };
+        row.addEventListener("click", function (event) {
+          event.preventDefault();
+          toggle();
+        });
+        row.addEventListener("keydown", function (event) {
+          if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
+          event.preventDefault();
+          toggle();
+        });
+        box.appendChild(row);
+      });
+      return box;
     }
 
     // 交给 DSH 设置页渲染的一节；内容用原生 DOM 挂到 ref 节点里，避免依赖 react-dom 版本差异
