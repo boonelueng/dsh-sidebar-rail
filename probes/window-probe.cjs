@@ -318,15 +318,24 @@ async function main() {
         afterOffset: d1.lights && d1.panel ? [d1.lights.x - d1.panel.x, d1.lights.y - d1.panel.y] : null });
     await shot("shot-window-dragged.png");
 
-    // ---------------------- 2a. 拖动期降级：摘掉 backdrop-filter，松手立即还回来
-    // 拖起来卡的真因是合成器必须按新位置重算背后模糊，所以拖动期间必须摘掉。
-    // 这里按住不放时读一次样式，松手后再读一次 —— 只看 CSS 写没写是不够的，
-    // 必须读到「计算后的 backdrop-filter 真的是 none」。
+    // ---------------------- 2a. 拖动期材质恒定：只加 will-change，一个像素都不改
+    // 曾经为了压掉「模糊每帧重采样」的性能开销，拖动期间把 backdrop-filter 摘掉 ——
+    // 代价是面板在起手瞬间从磨砂变清晰（用户看到的是「背景透明度变了」），
+    // 松手又变回磨砂（用户看到的是「闪一下」）。现在改成材质全程恒定，
+    // 性能由别的优化承担（真实鼠标长任务断言在最后一段压测里验）。
+    // 所以这里断言的不再是「模糊被摘掉」，而是**拖动中与常驻态逐项相同**。
     const readDragStyles = () => evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return null;
       const cs = getComputedStyle(p);
-      return { attr: p.getAttribute('data-dsh-rail-win-dragging'), backdrop: cs.backdropFilter || cs.webkitBackdropFilter || '', willChange: cs.willChange };
+      return {
+        attr: p.getAttribute('data-dsh-rail-win-dragging'),
+        backdrop: cs.backdropFilter || cs.webkitBackdropFilter || '',
+        background: cs.backgroundColor || '',
+        backgroundImage: cs.backgroundImage || '',
+        boxShadow: cs.boxShadow || '',
+        willChange: cs.willChange,
+      };
     })()`);
     const dragPoint2 = await evalJs(`(() => {
       const p = window.__HARNESS__.panel();
@@ -345,7 +354,7 @@ async function main() {
     if (dragPoint2 !== null) {
       const beforeDragStyle = await readDragStyles();
       await mouse("mousePressed", dragPoint2.x, dragPoint2.y);
-      // 必须超过 3px 阈值才算真的拖起来，否则降级标记不会置上
+      // 必须超过 3px 阈值才算真的拖起来，否则标记不会置上
       await mouse("mouseMoved", dragPoint2.x + 30, dragPoint2.y + 20);
       await sleep(80);
       const midDragStyle = await readDragStyles();
@@ -354,21 +363,33 @@ async function main() {
       await mouse("mouseReleased", dragPoint2.x + 60, dragPoint2.y + 40);
       await sleep(420);
       const afterDragStyle = await readDragStyles();
-      result.steps.dragDowngrade = { before: beforeDragStyle, mid: midDragStyle, after: afterDragStyle };
-      check("拖动中面板挂上降级标记（data-dsh-rail-win-dragging=1）",
+      result.steps.dragMaterial = { before: beforeDragStyle, mid: midDragStyle, after: afterDragStyle };
+      const same = (a, b, key) => a !== null && b !== null && String(a[key]) === String(b[key]);
+      check("拖动中面板挂上拖动标记（data-dsh-rail-win-dragging=1）",
         midDragStyle !== null && midDragStyle.attr === "1", midDragStyle);
-      check("拖动中真的摘掉了 backdrop-filter（不再每帧重算背后模糊）",
-        midDragStyle !== null && String(midDragStyle.backdrop).indexOf("blur") < 0, midDragStyle && midDragStyle.backdrop);
       check("拖动中面板被提成独立图层（will-change: transform）",
         midDragStyle !== null && /transform/.test(String(midDragStyle.willChange)), midDragStyle && midDragStyle.willChange);
-      check("松手后降级标记被摘掉",
+      check("拖动中模糊与常驻态完全一致（材质不降级，背景透明度不变）",
+        same(beforeDragStyle, midDragStyle, "backdrop") && /blur/.test(String(midDragStyle && midDragStyle.backdrop)),
+        { before: beforeDragStyle && beforeDragStyle.backdrop, mid: midDragStyle && midDragStyle.backdrop });
+      check("拖动中背景色与常驻态完全一致（不会从半透明跳成实心）",
+        same(beforeDragStyle, midDragStyle, "background"),
+        { before: beforeDragStyle && beforeDragStyle.background, mid: midDragStyle && midDragStyle.background });
+      check("拖动中描边投影与常驻态完全一致（高光不消失）",
+        same(beforeDragStyle, midDragStyle, "boxShadow"),
+        { before: beforeDragStyle && beforeDragStyle.boxShadow, mid: midDragStyle && midDragStyle.boxShadow });
+      check("松手后拖动标记被摘掉",
         afterDragStyle !== null && afterDragStyle.attr === null, afterDragStyle);
-      check("松手后液态玻璃的模糊原样回来",
-        afterDragStyle !== null && /blur/.test(String(afterDragStyle.backdrop)), afterDragStyle && afterDragStyle.backdrop);
-      check("拖动前本来就带模糊（说明降级确实是拖动才触发）",
+      check("松手后模糊仍是同一条（落手不闪、不跳材质）",
+        same(beforeDragStyle, afterDragStyle, "backdrop") && /blur/.test(String(afterDragStyle && afterDragStyle.backdrop)),
+        { before: beforeDragStyle && beforeDragStyle.backdrop, after: afterDragStyle && afterDragStyle.backdrop });
+      check("松手后背景色仍是同一条",
+        same(beforeDragStyle, afterDragStyle, "background"),
+        { before: beforeDragStyle && beforeDragStyle.background, after: afterDragStyle && afterDragStyle.background });
+      check("拖动前本来就带模糊（说明这条规则确实只加图层提示）",
         beforeDragStyle !== null && /blur/.test(String(beforeDragStyle.backdrop)), beforeDragStyle && beforeDragStyle.backdrop);
     } else {
-      check("拖动中面板挂上降级标记（data-dsh-rail-win-dragging=1）", false, "找不到落点");
+      check("拖动中面板挂上拖动标记（data-dsh-rail-win-dragging=1）", false, "找不到落点");
     }
 
     // ------------------------------------ 2b. 任意位置拖动 vs 交互元素不吃事件
@@ -631,6 +652,40 @@ async function main() {
       window.__PO__ = { res: res, obs: obs };
       return { ok: true };
     })()`);
+    // 同时记录拖动期间的帧间隔 —— 长任务只是「主线程有没有被卡住」，
+    // 而用户说的「跳帧」是「画面有没有连续」。rAF 相邻两次回调的间隔
+    // 一旦明显超过一个刷新周期（60Hz ≈ 16.7ms），就是真的丢了一帧。
+    // 两个指标一起看，才不会出现「没有长任务但画面照样卡」的漏判。
+    // 先量一段空闲基线，再拿拖动去比：headless 里空闲本身就可能偶尔抖一下，
+    // 不设基线会把环境噪声当成回归。
+    const startFrames = () => evalJs(`(() => {
+      if (window.__FRAMES__) window.__FRAMES__.stop();
+      const frames = { gaps: [], max: 0 };
+      let last = 0;
+      let stopped = false;
+      const tick = (t) => {
+        if (last !== 0) { const g = t - last; frames.gaps.push(Math.round(g)); if (g > frames.max) frames.max = g; }
+        last = t;
+        if (!stopped) window.requestAnimationFrame(tick);
+      };
+      window.__FRAMES__ = { frames: frames, stop: () => { stopped = true; } };
+      window.requestAnimationFrame(tick);
+      return { ok: true };
+    })()`);
+    const readFrames = () => evalJs(`(() => {
+      if (!window.__FRAMES__) return null;
+      window.__FRAMES__.stop();
+      const f = window.__FRAMES__.frames;
+      const sorted = f.gaps.slice().sort((a, b) => a - b);
+      const p95 = sorted.length > 0 ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : 0;
+      const over33 = f.gaps.filter((g) => g > 33).length;
+      const out = { count: f.gaps.length, max: f.max, p95: p95, over33: over33 };
+      window.__FRAMES__ = null;
+      return out;
+    })()`);
+    await startFrames();
+    await sleep(500);
+    result.steps.idleFrames = await readFrames();
     const stressPoint = await evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return null;
@@ -647,7 +702,9 @@ async function main() {
     })()`);
     if (longTaskStart !== null && longTaskStart.unsupported !== true && stressPoint !== null) {
       // 40 步 × 16ms ≈ 640ms 的连续拖动，足够覆盖若干帧
+      await startFrames();
       await dragBy(stressPoint, 200, 120, 40);
+      result.steps.dragFrames = await readFrames();
       result.steps.longTasks = await evalJs(`(() => {
         if (!window.__PO__) return { unsupported: true };
         window.__PO__.obs.disconnect();
@@ -662,6 +719,14 @@ async function main() {
     check("用真实鼠标拖动 40 步，全程无超过 80ms 的长任务",
       lt && lt.unsupported === true ? true : (!lt || lt.max <= 80),
       lt);
+    const df = result.steps.dragFrames;
+    // 材质不降级后模糊要每帧重采样，所以这里给一个「不丢帧」的判据：
+    // 超过两帧（>33ms）的间隔占比要很小，且最长的那一帧不能是卡死级别。
+    // headless + 软件渲染比真机容易出抖动，阈值留了余量；
+    // 真机若仍觉得卡，这条断言是最先该看的数字。
+    check("拖动期间画面连续（超两帧的间隔 ≤ 10%，最长一帧 ≤ 100ms）",
+      df === null ? true : (df.over33 <= Math.max(1, Math.round(df.count * 0.1)) && df.max <= 100),
+      df);
   } catch (err) {
     result.errors.push("fatal: " + String(err && err.message ? err.message : err));
   } finally {

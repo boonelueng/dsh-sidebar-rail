@@ -67,9 +67,11 @@ window.__ModuleLoader__.load({
      * 光标立刻退回常态，不会出现「看起来能拖其实拖不动」。
      */
     const ATTR_DRAG = "data-dsh-rail-win-drag";
-    /** 拖动进行中的标记。挂上时样式表会摘掉面板的 backdrop-filter：
-        拖着 translate3d 跑的时候，模糊层每一帧都要按新的位置重算背后内容，
-        这是拖起来发涩、掉帧的主因。松手立刻摘掉，玻璃质感原样回来。 */
+    /** 拖动进行中的标记。挂在面板上时样式表只做一件事：加 will-change:transform，
+        让合成器提前把面板当成要动的图层。
+        **刻意不动任何视觉属性**（模糊、背景色、描边、投影全程不变）：
+        曾经这里会摘掉 backdrop-filter 来省掉每帧模糊重采样，结果是拖起来
+        「背景忽然变清晰」、松手又变回磨砂 —— 用户看到的就是透明度在变、还闪一下。 */
     const ATTR_DRAGGING = "data-dsh-rail-win-dragging";
     const STORAGE_WIN = "dsh-sidebar-rail.win.v1";
     const PANEL_SEL = '[data-shortcut-modal="settings"]';
@@ -295,27 +297,32 @@ window.__ModuleLoader__.load({
       "backdrop-filter:blur(22px) saturate(170%)!important;",
       "-webkit-backdrop-filter:blur(22px) saturate(170%)!important;",
       "background:color-mix(in srgb, var(--dsw-alias-bg-layer-2,#1b1b20) 66%, transparent)!important;",
-      "box-shadow:inset 0 1px 0 rgba(255,255,255,.16),inset 0 0 0 1px rgba(255,255,255,.10),var(--dsw-elevation-prominent)!important;",
+      /* 投影变量必须自带兜底值 —— 不能靠「再写一条不含 var 的同类声明」来兜。
+         CSS 规范里 var() 解析不出来属于 invalid at computed-value time：
+         此时整个属性会退成 unset/initial（box-shadow → none），
+         **不会**回退到同一规则块里前面那条声明。所以宿主版本若没有
+         --dsw-elevation-prominent，高光描边会连同投影一起消失。
+         给 var() 第二个参数一个与官方 elevation 同量级的兜底投影即可。 */
+      "box-shadow:inset 0 1px 0 rgba(255,255,255,.16),inset 0 0 0 1px rgba(255,255,255,.10),var(--dsw-elevation-prominent,0 12px 40px rgba(0,0,0,.28))!important;",
       "}",
       /* 尊重系统「减少透明」偏好：回退为不透明背景，避免文字糊在透出的内容上 */
       "@media (prefers-reduced-transparency: reduce){",
       "[data-dsh-rail-win]{",
       "backdrop-filter:none!important;-webkit-backdrop-filter:none!important;",
-      "background:var(--dsw-alias-bg-layer-2)!important;",
-      "box-shadow:var(--dsw-elevation-prominent)!important;",
+      "background:var(--dsw-alias-bg-layer-2,#1b1b20)!important;",
+      "box-shadow:var(--dsw-elevation-prominent,0 12px 40px rgba(0,0,0,.28))!important;",
       "}",
       "}",
 
-      /* ---- 拖动期降级（关键性能修复）----
-         拖动只写 transform，本该由合成器直接搬运；但面板开着 backdrop-filter 时，
-         合成器必须按「新的位置」重新采样背后内容再做模糊，等于每帧一次全屏重算，
-         真实机器上表现为明显卡顿。这里在拖动的整个过程中把模糊摘掉，
-         松手之后再把玻璃质感还回来。
-         **只摘 blur，不改 background**：背景色保持和常驻态一模一样（同一条
-         color-mix 半透明），这样松手恢复时只有「模糊」这一件事在变，
-         不会再多出一次「底色从实心跳回半透明」的闪烁。 */
+      /* ---- 拖动期：只做「图层提示」，不改任何像素 ----
+         拖动只写 transform，本该由合成器直接搬运。这里在拖动过程中给面板加
+         will-change:transform，让浏览器提前把它当成要动的图层。
+         **刻意不碰 backdrop-filter、也不碰 background**：
+         以前为了压掉模糊的每帧重采样，曾在拖动中把模糊摘掉 —— 结果正是
+         「拖起来背景忽然变清晰（看起来像透明度变了）、松手又变回去（闪一下）」。
+         材质必须全程恒定：模糊半径、背景色、描边、投影一律不动，
+         拖动态与常驻态看起来一模一样，起手和落手才不会各闪一次。 */
       "[data-dsh-rail-win][data-dsh-rail-win-dragging=\"1\"]{",
-      "backdrop-filter:none!important;-webkit-backdrop-filter:none!important;",
       "will-change:transform!important;",
       "}",
     ].join("\n");
@@ -878,17 +885,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 松手后把玻璃质感还回来 —— 但**不是立刻**。
+     * 松手后回收拖动期的图层提示 —— 但**不是立刻**。
      *
-     * 之前是在 pointerup 里直接摘掉 ATTR_DRAGGING，于是同一帧做了三件互相打架的事：
-     *   1) 摘掉标记 → backdrop-filter 恢复、will-change 撤掉 → 合成器要把图层重新光栅化；
-     *   2) applyWindow() 写 left/top → 面板换到新位置（从 transform 表达改回布局位置）；
-     *   3) clearDragTransform() 清空 transform → 图层又一次失效。
-     * 三件事挤在一帧里，浏览器只能拿「新的位置 + 还没算好的背景」先画一帧，
-     * 看起来就是落位瞬间闪一下 / 掉一帧。
-     *
-     * 改成两帧分离：第一帧只负责把位置落定（仍是降级态，没有模糊，合成成本最低），
-     * 下一帧再恢复模糊与 will-change。位置动与重光栅化不再抢同一帧。
+     * 材质（模糊、背景色、描边、投影）在拖动全程与常驻态完全一致，所以这里
+     * 不再有「玻璃回不回来」的问题；要收的只有 will-change:transform 这一个提示。
+     * 即便如此也不和落位挤同一帧：pointerup 那一帧已经在做
+     *   1) applyWindow() 写 left/top（面板从 transform 表达换回布局位置）
+     *   2) clearDragTransform() 清空 transform（图层又一次失效）
+     * 两件重活。若再同时撤 will-change，合成器还得把图层重新降级、重新光栅化，
+     * 三件事抢一帧仍会掉帧。第一帧只落位置，下一帧再撤提示。
      */
     function settleDragging() {
       cancelSettle();
@@ -900,7 +905,17 @@ window.__ModuleLoader__.load({
       });
     }
 
-    /** 拖动降级属性的开关：置上时摘掉 backdrop-filter，让合成器能直接搬图层。 */
+    /**
+     * 拖动期图层提示的开关。
+     *
+     * 只加 will-change:transform，**不改任何视觉属性**：
+     * 曾经这里还会把 backdrop-filter 摘掉来省掉每帧模糊重采样，代价是面板
+     * 在起手瞬间从「磨砂」变「清晰」（看上去就是背景透明度变了），松手又变回去
+     * （看上去就是闪一下）。宁可让合成器老老实实每帧重采样，也不让材质在
+     * 拖动前后出现任何跳变。
+     */
+
+    /** 拖动期标记的开关：置上时只加 will-change:transform，不摘任何材质。 */
     function markDraggingAttr() {
       if (panelEl !== null && panelEl.getAttribute(ATTR_DRAGGING) !== "1") panelEl.setAttribute(ATTR_DRAGGING, "1");
     }
@@ -957,8 +972,8 @@ window.__ModuleLoader__.load({
         if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
         drag.active = true;
         document.body.classList.add("dsr-win-dragging");
-        // 拖动期间摘掉面板的 backdrop-filter：模糊层跟着 translate3d 每帧重算背后内容，
-        // 是拖起来发涩的主因。松手（endDragListeners）立刻摘掉标记，玻璃质感回来。
+        // 拖动期间只加 will-change:transform 这个图层提示，材质一个像素都不动。
+        // 松手后由 settleDragging() 在下一帧摘掉（不与落位抢同一帧）。
         markDraggingAttr();
         // 确认是拖动之后才捕获：鼠标滑出面板范围也继续跟手，
         // 而且此时点击已经不会被误伤（这次按下本来就不是点）。
