@@ -275,14 +275,34 @@ async function main() {
     await shot("shot-window-open.png");
 
     // ------------------------------------------------------------- 2. 拖动移动
+    // 需求是「面板任意位置都能按住拖走」，所以这里刻意不从抓手起拖，
+    // 而是在面板里现找一个**不是交互元素**的落点（列表行、说明文字、空白处都算），
+    // 找到哪个就用哪个 —— 探针不写死坐标，页面结构变了也不会假装通过。
+    const freePoint = await evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return null;
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const r = p.getBoundingClientRect();
+      for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
+        for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
+          const el = document.elementFromPoint(x, y);
+          if (!el || !p.contains(el)) continue;
+          if (el.closest(bad)) continue;
+          return { x: x, y: y, tag: el.tagName, cls: String(el.className || '') };
+        }
+      }
+      return null;
+    })()`);
+    check("面板里能找到非交互的空白落点（任意位置拖动的前提）", freePoint !== null, freePoint);
+
     const base = o.panel;
-    const gripBox = o.grip;
-    const gripPt = { x: Math.round(gripBox.x + 60), y: Math.round(gripBox.y + gripBox.h / 2) };
-    await dragBy(gripPt, -260, 120, 10);
+    // 起拖方向刻意往右下：clampPos(0,0) 把左边界钉在 minX=80，
+    // 往左拖会在 80 处被夹住，位移就对不上，验的就不是拖动本身了（边界另有专门一项）。
+    await dragBy(freePoint, 120, 120, 10);
     result.steps.dragged = await panelBox();
     const d1 = result.steps.dragged;
-    check("拖动后窗口真的移动了（位移 ≈ -260,120）",
-      d1.panel !== null && Math.abs((d1.panel.x - base.x) - (-260)) <= 20 && Math.abs((d1.panel.y - base.y) - 120) <= 8,
+    check("拖动后窗口真的移动了（从面板空白处起拖，位移 ≈ 120,120）",
+      d1.panel !== null && Math.abs((d1.panel.x - base.x) - 120) <= 8 && Math.abs((d1.panel.y - base.y) - 120) <= 8,
       { before: base, after: d1.panel, movedBy: d1.panel ? [d1.panel.x - base.x, d1.panel.y - base.y] : null });
     check("拖动后没有残留 transform",
       (await evalJs("getComputedStyle(window.__HARNESS__.panel()).transform")) === "none",
@@ -298,9 +318,86 @@ async function main() {
         afterOffset: d1.lights && d1.panel ? [d1.lights.x - d1.panel.x, d1.lights.y - d1.panel.y] : null });
     await shot("shot-window-dragged.png");
 
+    // ------------------------------------ 2b. 任意位置拖动 vs 交互元素不吃事件
+    // 这是本次需求的核心，也是唯一会踩坏旧功能的点：
+    //   ① 标题栏里的「设置」二字（非交互元素）也能拖；
+    //   ② 按在按钮上拖动，窗口不能跟着走（否则点按钮会变成拖窗口）；
+    //   ③ 点按钮仍然照常触发它自己的动作（事件没被拖动逻辑吞掉）。
+    const titlePt = (() => {
+      const t = d1.title;
+      return t ? { x: Math.round(t.x + Math.min(30, t.w / 2)), y: Math.round(t.y + 34) } : null;
+    })();
+    if (titlePt !== null) {
+      const before2 = d1.panel;
+      await dragBy(titlePt, -80, 60, 6);
+      const after2 = await panelBox();
+      check("按住左侧「设置」标题也能拖动窗口（标题栏不再是唯一入口）",
+        after2.panel !== null &&
+        Math.abs((after2.panel.x - before2.x) - (-80)) <= 20 &&
+        Math.abs((after2.panel.y - before2.y) - 60) <= 10,
+        { before: before2, after: after2.panel, movedBy: after2.panel ? [after2.panel.x - before2.x, after2.panel.y - before2.y] : null });
+      result.steps.draggedFromTitle = after2;
+    } else {
+      check("按住左侧「设置」标题也能拖动窗口（标题栏不再是唯一入口）", false, "找不到标题元素");
+    }
+
+    const afterTitleDrag = result.steps.draggedFromTitle || d1;
+    // 按在官方 × 上拖：窗口必须纹丝不动（那个按钮归官方管）
+    const closePt = centerOf(afterTitleDrag.closeBtn);
+    const beforeBtnDrag = afterTitleDrag.panel;
+    await dragBy(closePt, -140, 100, 6);
+    const afterBtnDrag = await panelBox();
+    check("按在按钮上拖动不会拖走窗口（交互元素优先）",
+      afterBtnDrag.panel !== null &&
+      Math.abs(afterBtnDrag.panel.x - beforeBtnDrag.x) <= 2 &&
+      Math.abs(afterBtnDrag.panel.y - beforeBtnDrag.y) <= 2,
+      { before: beforeBtnDrag, after: afterBtnDrag.panel });
+    // 上面那一拖从 × 上按下又松开，会顺带把设置关掉 —— 重新打开继续
+    if (afterBtnDrag.panel === null || (await evalJs("window.__HARNESS__.settingsOpen()")) !== true) {
+      await openSettings();
+      await sleep(300);
+    }
+    // 导航格是 button：点它必须还能切换（证明 click 没被拖动逻辑吞掉）
+    const navOk = await evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return { ok: false, reason: 'no-panel' };
+      const cell = p.querySelector('.stNavCell:not([data-active="true"])');
+      if (!cell) return { ok: false, reason: 'no-cell' };
+      cell.click();
+      return { ok: true };
+    })()`);
+    check("面板里的按钮点击仍然有效（click 没被拖动逻辑吞掉）", navOk !== null && navOk.ok === true, navOk);
+
+    // 2c. 边界夹逼：往左拖到视口外，窗口应该停在 minX=80，而不是整个飞出去。
+    // 这条单独验，是因为上一项「位移对不上」曾经就是被它悄悄吃掉的（容差把夹逼藏起来了）。
+    const freePoint2 = await evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return null;
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const r = p.getBoundingClientRect();
+      for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
+        for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
+          const el = document.elementFromPoint(x, y);
+          if (!el || !p.contains(el) || el.closest(bad)) continue;
+          return { x: x, y: y };
+        }
+      }
+      return null;
+    })()`);
+    if (freePoint2 !== null) {
+      await dragBy(freePoint2, -900, 0, 10);
+      const clamped = await panelBox();
+      check("往视口外拖会被夹在左边界（x=80），不会飞出屏幕",
+        clamped.panel !== null && Math.abs(clamped.panel.x - 80) <= 2, clamped.panel);
+    } else {
+      check("往视口外拖会被夹在左边界（x=80），不会飞出屏幕", false, "找不到落点");
+    }
+
     // ------------------------------------------------ 3. 最大化：铺满会话区
     // 圆点只有两个且顺序是「绿(最大化) / 黄(最小化)」，所以最大化取 dots[0]
-    const maxBtn = centerOf(d1.dots[0]);
+    // 注意：2b 里又拖过两次窗口，d1 的坐标已经过期，这里必须重新取快照。
+    const cur = await panelBox();
+    const maxBtn = centerOf(cur.dots[0]);
     await mouse("mousePressed", maxBtn.x, maxBtn.y);
     await mouse("mouseReleased", maxBtn.x, maxBtn.y);
     await sleep(420);
@@ -327,9 +424,9 @@ async function main() {
     result.steps.unmaximized = await panelBox();
     check("再点最大化回到拖动后的位置与尺寸",
       result.steps.unmaximized.max === null &&
-      Math.abs(result.steps.unmaximized.panel.x - d1.panel.x) <= 3 &&
-      Math.abs(result.steps.unmaximized.panel.w - d1.panel.w) <= 3,
-      { now: result.steps.unmaximized.panel, want: d1.panel });
+      Math.abs(result.steps.unmaximized.panel.x - cur.panel.x) <= 3 &&
+      Math.abs(result.steps.unmaximized.panel.w - cur.panel.w) <= 3,
+      { now: result.steps.unmaximized.panel, want: cur.panel });
 
     // ---------------------------------------------------------- 4. 最小化
     const u1 = result.steps.unmaximized;
@@ -348,9 +445,9 @@ async function main() {
     await shot("shot-window-min.png");
 
     // 点最小化后的标题条还原
-    const titlePt = centerOf({ x: n1.panel.x + 12, y: n1.panel.y, w: 80, h: 54 });
-    await mouse("mousePressed", titlePt.x, titlePt.y);
-    await mouse("mouseReleased", titlePt.x, titlePt.y);
+    const barPt = centerOf({ x: n1.panel.x + 12, y: n1.panel.y, w: 80, h: 54 });
+    await mouse("mousePressed", barPt.x, barPt.y);
+    await mouse("mouseReleased", barPt.x, barPt.y);
     await sleep(420);
     result.steps.restored = await panelBox();
     check("点最小化后的标题条能还原",
@@ -358,6 +455,8 @@ async function main() {
       { min: result.steps.restored.min, panel: result.steps.restored.panel });
 
     // ------------------------------------------------------- 5. 刷新后保持
+    // 以「还原后」的实时位置为准（2b 又拖过几次，d1 已过期）
+    const beforeReload = result.steps.restored.panel;
     await c.send("Page.navigate", { url: PAGE });
     for (let i = 0; i < 120; i++) {
       if (await evalJs("typeof window.__HARNESS__ !== 'undefined'")) break;
@@ -368,9 +467,9 @@ async function main() {
     result.steps.afterReload = await panelBox();
     check("刷新后重开设置，窗口位置仍保留",
       result.steps.afterReload.panel !== null &&
-      Math.abs(result.steps.afterReload.panel.x - d1.panel.x) <= 4 &&
-      Math.abs(result.steps.afterReload.panel.y - d1.panel.y) <= 4,
-      { now: result.steps.afterReload.panel, want: d1.panel });
+      Math.abs(result.steps.afterReload.panel.x - beforeReload.x) <= 4 &&
+      Math.abs(result.steps.afterReload.panel.y - beforeReload.y) <= 4,
+      { now: result.steps.afterReload.panel, want: beforeReload });
 
     // -------------------------------------------------------- 6. 关闭按钮
     // 关闭不再是我们造的红点，而是官方 header 里那个 × 图标按钮——点它必须真的关掉。
@@ -406,11 +505,20 @@ async function main() {
       });
       try { obs.observe({ entryTypes: ['longtask'] }); } catch (e) { return { unsupported: true }; }
       const p = window.__HARNESS__.panel();
-      const g = document.querySelector('[data-dsh-rail-win-grip]');
-      if (!g) { obs.disconnect(); return { unsupported: true }; }
-      const r = g.getBoundingClientRect();
-      const x0 = Math.round(r.x + 60), y0 = Math.round(r.y + r.height / 2);
-      const ev = (type, x, y) => g.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1, pointerId: 1 }));
+      if (!p) { obs.disconnect(); return { unsupported: true }; }
+      // 从面板正文里找一个非交互落点来压测（拖动入口已经不在抓手上）
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const pr = p.getBoundingClientRect();
+      let target = null, x0 = 0, y0 = 0;
+      outer: for (let y = Math.round(pr.bottom) - 40; y > pr.top + 60; y -= 12) {
+        for (let x = Math.round(pr.left) + 24; x < pr.right - 24; x += 24) {
+          const el = document.elementFromPoint(x, y);
+          if (!el || !p.contains(el) || el.closest(bad)) continue;
+          target = el; x0 = x; y0 = y; break outer;
+        }
+      }
+      if (!target) { obs.disconnect(); return { unsupported: true }; }
+      const ev = (type, x, y) => target.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1, pointerId: 1 }));
       ev('pointerdown', x0, y0);
       for (let i = 1; i <= 30; i++) {
         ev('pointermove', x0 + i * 4, y0 + i * 2);

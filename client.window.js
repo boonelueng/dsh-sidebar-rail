@@ -2,11 +2,11 @@
  * 可选模块：设置窗口化。
  *
  * 给 DSH 官方的设置弹窗补上桌面窗口的行为：
- *   - 按住顶部标题栏拖动整个窗口；
- *   - 右上角三个「红绿灯」按钮（关闭=红 / 最小化=黄 / 最大化=绿）；
+ *   - 按住面板任意位置都能拖动整个窗口（按钮、输入框等交互元素除外）；
+ *   - 右上角两个圆点：绿=最大化、黄=最小化；
  *   - 最大化 = 铺满侧边栏右侧的会话区，再点一次还原；
  *   - 最小化 = 收成一条停在弹出位置的标题栏，点它还原；
- *   - 关闭 = 调用官方自己的 close（与右上角 ×、遮罩点击、Esc 完全等价）。
+ *   - 关闭 = 官方 header 那个 × 按钮（只把外观换成红圆点，行为完全不动）。
  *
  * 设计上只用「官方设置弹窗本来就有的 DOM 契约」定位：
  *   [data-shortcut-modal="settings"]  → 面板本身（role=dialog）
@@ -61,6 +61,12 @@ window.__ModuleLoader__.load({
      * 它走的关闭路径全部不动，只换「看起来是什么」。
      */
     const ATTR_CLOSE = "data-dsh-rail-win-close";
+    /**
+     * 拖动开关的 DOM 投影。开着时面板任意位置都能按住拖走，
+     * 所以整块面板的 cursor 要变成 grab；关掉时摘掉这个属性，
+     * 光标立刻退回常态，不会出现「看起来能拖其实拖不动」。
+     */
+    const ATTR_DRAG = "data-dsh-rail-win-drag";
     const STORAGE_WIN = "dsh-sidebar-rail.win.v1";
     const PANEL_SEL = '[data-shortcut-modal="settings"]';
     const TITLE_SEL = '[data-dsh-rail-win-title="1"]';
@@ -68,6 +74,31 @@ window.__ModuleLoader__.load({
 
     const DRAG_THRESHOLD = 3;
     const VIEWPORT_GAP = 8;
+
+    /**
+     * 按住这里面的东西不算「拖窗口」，要把事件让给它们自己：
+     * 按钮、链接、表单控件、可编辑区、以及带 role=button 的自定义控件。
+     * 少判一个就会出现「点不动按钮」「输入框里选不了字」这类回归。
+     */
+    const INTERACTIVE_SEL = [
+      "button",
+      "a[href]",
+      "input",
+      "textarea",
+      "select",
+      "option",
+      "label",
+      "summary",
+      "[contenteditable]",
+      "[contenteditable='true']",
+      "[role='button']",
+      "[role='link']",
+      "[role='tab']",
+      "[role='checkbox']",
+      "[role='switch']",
+      "[data-dsh-rail-win-lights]",
+      "[data-dsh-rail-win-close]",
+    ].join(",");
 
     // 三条状态：
     //   normal  – 官方居中布局，未做任何位移
@@ -135,16 +166,26 @@ window.__ModuleLoader__.load({
       "-webkit-user-select:none!important;user-select:none!important;",
       "}",
 
-      /* 抓手：占据标题栏右侧的剩余空间，按住即可拖动整个窗口。
-         它自己不放任何文字，所以不会和官方的「设置」标题打架。 */
+      /* 标题栏覆盖层：最小化后整块面板只剩一条，点这条（不拖动）就还原。
+         它自己不放任何文字，所以不会和官方的「设置」标题打架；
+         拖动已经提升到整块面板（见 [data-dsh-rail-win-drag]），不再依赖这一层。 */
       "[data-dsh-rail-win] > [data-dsh-rail-win-grip]{",
       "position:absolute;left:0;right:0;top:0;height:54px;",
       "display:flex!important;align-items:center!important;justify-content:flex-end!important;",
       "padding-right:104px;box-sizing:border-box;",
-      "cursor:grab;touch-action:none;-webkit-user-drag:none;user-select:none;",
+      "touch-action:none;-webkit-user-drag:none;user-select:none;",
       "z-index:0;",
       "}",
-      "body.dsr-win-dragging{cursor:grabbing!important;user-select:none!important}",
+      /* 任意位置拖动开着时：整块面板给 grab 光标，按住任何非交互处都能拖走。
+         关掉拖动就摘掉这个属性，光标立刻退回常态，不会「看起来能拖其实拖不动」。 */
+      "[data-dsh-rail-win][data-dsh-rail-win-drag='1']{cursor:grab}",
+      "[data-dsh-rail-win][data-dsh-rail-win-drag='1'] *{cursor:inherit}",
+      /* 交互元素自己保留原本的光标，否则按钮、链接上也会显示抓手 */
+      "[data-dsh-rail-win][data-dsh-rail-win-drag='1'] button{cursor:pointer}",
+      "[data-dsh-rail-win][data-dsh-rail-win-drag='1'] a[href]{cursor:pointer}",
+      "[data-dsh-rail-win][data-dsh-rail-win-drag='1'] input,"
+        + "[data-dsh-rail-win][data-dsh-rail-win-drag='1'] textarea{cursor:text}",
+      "body.dsr-win-dragging,body.dsr-win-dragging *{cursor:grabbing!important;user-select:none!important}",
 
       /* 官方 header 行抬到抓手之上：抓手是覆盖整条标题栏的绝对定位层（z-index:0），
          红绿灯现在住在 header 里，若不抬高就会被抓手盖住、点不到。 */
@@ -492,25 +533,66 @@ window.__ModuleLoader__.load({
     function ensureGrip() {
       if (gripEl !== null && gripEl.isConnected) return;
       gripEl = el("div", { "data-dsh-rail-win-grip": "1", "aria-hidden": "true" }, null);
-      // 拖动关掉时这根条还在（最小化后它是要点的那条标题栏），只是不再响应拖动
-      if (featureOn("drag")) gripEl.addEventListener("pointerdown", onGripPointerDown);
-      // 最小化后只剩一条标题栏，点它（不拖动）就还原
-      gripEl.addEventListener("pointerup", function (event) {
-        if (event.button !== undefined && event.button !== 0) return;
-        if (drag !== null && drag.active === true) return;
-        if (!featureOn("restore")) return;
-        if (minimized === true) setMinimized(false);
-      });
-      gripEl.addEventListener("dblclick", function (event) {
-        event.preventDefault();
-        if (!featureOn("restore") && minimized === true) return;
-        if (minimized === true) {
-          setMinimized(false);
-          return;
-        }
-        toggleMax();
-      });
+      // 抓手只负责两件事：最小化后点它还原、双击切换最大化。
+      // 拖动本身不挂在这里了 —— 整块面板任意位置都能拖（见 ensurePanelDrag）。
+      gripEl.addEventListener("pointerup", onGripPointerUpRestore);
+      gripEl.addEventListener("dblclick", onGripDblClick);
       panelEl.insertBefore(gripEl, panelEl.firstChild);
+    }
+
+    /** 最小化后只剩一条标题栏，点它（不拖动）就还原。 */
+    function onGripPointerUpRestore(event) {
+      if (event.button !== undefined && event.button !== 0) return;
+      if (drag !== null && drag.active === true) return;
+      if (!featureOn("restore")) return;
+      if (minimized === true) setMinimized(false);
+    }
+
+    /** 双击标题条：最小化时还原，其余情况切换最大化。 */
+    function onGripDblClick(event) {
+      event.preventDefault();
+      if (!featureOn("restore") && minimized === true) return;
+      if (minimized === true) {
+        setMinimized(false);
+        return;
+      }
+      toggleMax();
+    }
+
+    /**
+     * 面板级拖动入口。
+     *
+     * 挂在捕获阶段：面板里任何一处按下都会先到这里，判断该不该接管。
+     * 交互元素（按钮 / 链接 / 输入框 / 可编辑区 …）直接放行，让它们自己处理点击；
+     * 其余位置按下即记录起点，等移动超过阈值才真正开始拖 —— 所以
+     * 「点一下」永远还是「点一下」，不会因为手抖变成拖窗口。
+     */
+    function ensurePanelDrag() {
+      if (panelEl === null) return;
+      if (featureOn("drag")) {
+        if (panelEl.getAttribute(ATTR_DRAG) !== "1") panelEl.setAttribute(ATTR_DRAG, "1");
+        if (panelEl.__dsrDragBound !== true) {
+          panelEl.addEventListener("pointerdown", onDragPointerDown, true);
+          panelEl.__dsrDragBound = true;
+        }
+        return;
+      }
+      releasePanelDrag();
+    }
+
+    function releasePanelDrag() {
+      if (panelEl === null) return;
+      if (panelEl.__dsrDragBound === true) {
+        panelEl.removeEventListener("pointerdown", onDragPointerDown, true);
+        panelEl.__dsrDragBound = false;
+      }
+      if (panelEl.getAttribute(ATTR_DRAG) === "1") panelEl.removeAttribute(ATTR_DRAG);
+    }
+
+    /** 按住这里面的东西不算「拖窗口」，要把事件让给它们自己。 */
+    function isInteractive(node) {
+      if (!(node instanceof Element)) return false;
+      return node.closest(INTERACTIVE_SEL) !== null;
     }
 
     function computeTitleBarTop() {
@@ -700,10 +782,9 @@ window.__ModuleLoader__.load({
       const dx = dragPending.dx;
       const dy = dragPending.dy;
       dragPending = null;
-      // 拖动期间只写 transform：由合成器处理，不触发布局
+      // 拖动期间只写 transform：由合成器处理，不触发布局。
+      // 抓手与圆点都是面板的子节点，跟着面板一起动，不能再单独写一遍（会位移翻倍）。
       panelEl.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
-      if (gripEl !== null) gripEl.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
-      // 红绿灯住在 header 里，跟着面板的 transform 一起动，不能再单独写一遍（会位移翻倍）
       if (diag !== null && diag.window !== null && diag.window !== undefined) {
         diag.window.dragging = { dx: dx, dy: dy };
       }
@@ -711,16 +792,34 @@ window.__ModuleLoader__.load({
 
     function clearDragTransform() {
       if (panelEl !== null && panelEl.style.transform !== "") panelEl.style.transform = "";
-      if (gripEl !== null && gripEl.style.transform !== "") gripEl.style.transform = "";
     }
 
-    function onGripPointerDown(event) {
+    /** 摘掉拖动期间临时挂在 window 上的监听（松手、异常、面板重建时都要走这里）。 */
+    function endDragListeners() {
+      window.removeEventListener("pointermove", onDragPointerMove, true);
+      window.removeEventListener("pointerup", onDragPointerUp, true);
+      window.removeEventListener("pointercancel", onDragPointerUp, true);
+      if (dragRaf !== 0) {
+        window.cancelAnimationFrame(dragRaf);
+        dragRaf = 0;
+      }
+      dragPending = null;
+      drag = null;
+      if (document.body.classList.contains("dsr-win-dragging")) document.body.classList.remove("dsr-win-dragging");
+    }
+
+    function onDragPointerDown(event) {
       if (event.button !== 0) return;
       if (panelEl === null) return;
       if (minimized === true) return;
-      // 红绿灯自己会 stopPropagation，这里再兜一次
+      // 圆点自己会 stopPropagation，这里再兜一次
       if (event.target instanceof Element && event.target.closest("[data-dsh-rail-win-lights]") !== null) return;
-      event.preventDefault();
+      // 任意位置拖动：按在交互元素上时不接管（否则点按钮会变成拖窗口）。
+      // 圆点组与官方 × 都在下面的选择器里，这里是第二道保险。
+      if (event.target instanceof Element && isInteractive(event.target)) return;
+      // 这里刻意不 preventDefault：面板里还有导航、输入框、可选中文字，
+      // 在按下阶段就吞掉默认行为会连点击与选中一起废掉。
+      // 真正开始拖（移动超过阈值）时才在 pointermove 里 preventDefault。
       const p = mode === MODE_DRAGGED ? { x: posX, y: posY } : roundRect(panelEl.getBoundingClientRect());
       drag = {
         x0: event.clientX,
@@ -731,17 +830,15 @@ window.__ModuleLoader__.load({
         pointerId: event.pointerId,
       };
       dragPending = null;
-      try {
-        gripEl.setPointerCapture(event.pointerId);
-      } catch (err) {
-        // 某些环境不支持指针捕获，退化成普通监听即可
-      }
-      window.addEventListener("pointermove", onGripPointerMove, true);
-      window.addEventListener("pointerup", onGripPointerUp, true);
-      window.addEventListener("pointercancel", onGripPointerUp, true);
+      // 这里刻意不做 setPointerCapture：一旦捕获，后续 click 会被重定向到捕获元素，
+      // 面板里那些「不是 button 但能点」的东西（列表行、label 之外的容器）会点不动。
+      // 等移动真的超过阈值、确认这是拖而不是点，再在 pointermove 里捕获。
+      window.addEventListener("pointermove", onDragPointerMove, true);
+      window.addEventListener("pointerup", onDragPointerUp, true);
+      window.addEventListener("pointercancel", onDragPointerUp, true);
     }
 
-    function onGripPointerMove(event) {
+    function onDragPointerMove(event) {
       if (drag === null) return;
       const dx = event.clientX - drag.x0;
       const dy = event.clientY - drag.y0;
@@ -749,35 +846,41 @@ window.__ModuleLoader__.load({
         if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
         drag.active = true;
         document.body.classList.add("dsr-win-dragging");
+        // 确认是拖动之后才捕获：鼠标滑出面板范围也继续跟手，
+        // 而且此时点击已经不会被误伤（这次按下本来就不是点）。
+        try {
+          if (panelEl !== null) panelEl.setPointerCapture(drag.pointerId);
+        } catch (err) {
+          // 某些环境不支持指针捕获，退化成普通监听即可
+        }
       }
       event.preventDefault();
       dragPending = { dx: dx, dy: dy };
       if (dragRaf === 0) dragRaf = window.requestAnimationFrame(flushDrag);
     }
 
-    function onGripPointerUp(event) {
-      window.removeEventListener("pointermove", onGripPointerMove, true);
-      window.removeEventListener("pointerup", onGripPointerUp, true);
-      window.removeEventListener("pointercancel", onGripPointerUp, true);
-      if (drag === null) return;
-      const d = drag;
-      drag = null;
+    function onDragPointerUp(event) {
+      // 先记下本次是否真的拖起来了，endDragListeners 会把 drag 清成 null
+      const live = drag;
+      const moved = live !== null && live.active === true;
+      const startX = live !== null ? live.sx : 0;
+      const startY = live !== null ? live.sy : 0;
+      const fromX = live !== null ? live.x0 : 0;
+      const fromY = live !== null ? live.y0 : 0;
       try {
-        if (gripEl !== null && gripEl.hasPointerCapture(event.pointerId)) gripEl.releasePointerCapture(event.pointerId);
+        // 捕获挂在面板上：鼠标滑出面板范围甚至滑出窗口也继续跟手
+        const target = panelEl !== null ? panelEl : gripEl;
+        if (target !== null && target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
       } catch (err) {
         // 忽略
       }
-      if (dragRaf !== 0) {
-        window.cancelAnimationFrame(dragRaf);
-        dragRaf = 0;
-      }
-      dragPending = null;
-      document.body.classList.remove("dsr-win-dragging");
-      if (d.active !== true) return;
+      endDragListeners();
+      // 没超过阈值 = 只是点了一下，不算拖动，什么都不用落盘
+      if (moved !== true) return;
 
-      const dx = event.clientX - d.x0;
-      const dy = event.clientY - d.y0;
-      const clamped = clampPos(d.sx + dx, d.sy + dy, 0, 0);
+      const dx = event.clientX - fromX;
+      const dy = event.clientY - fromY;
+      const clamped = clampPos(startX + dx, startY + dy, 0, 0);
       posX = clamped.x;
       posY = clamped.y;
       // 顺序很关键：先把 transform 清掉再写 left/top 会闪一帧；
@@ -791,8 +894,12 @@ window.__ModuleLoader__.load({
     // -------------------------------------------------------- 面板的发现与接管
     function cleanupPanel() {
       clearDragTransform();
+      // 拖动中的话先把 window 上的临时监听摘掉，否则面板换了一个、旧监听还在跟手
+      endDragListeners();
+      releasePanelDrag();
       if (gripEl !== null) {
-        gripEl.removeEventListener("pointerdown", onGripPointerDown);
+        gripEl.removeEventListener("pointerup", onGripPointerUpRestore);
+        gripEl.removeEventListener("dblclick", onGripDblClick);
         gripEl.remove();
         gripEl = null;
       }
@@ -879,6 +986,7 @@ window.__ModuleLoader__.load({
 
       ensureGrip();
       ensureLights();
+      ensurePanelDrag();
       applyWindow();
     }
 
@@ -1036,28 +1144,19 @@ window.__ModuleLoader__.load({
       } else {
         ensureLights();
       }
-      // 拖动：绑定是建 DOM 时定的，改开关只能重建这根条；条本身要留着
-      if (gripEl !== null) {
-        const dragging = drag !== null;
-        if (dragging) {
-          try {
-            gripEl.releasePointerCapture(drag.pointerId);
-          } catch (err) {
-            // 忽略：没有捕获或已释放
-          }
-          drag = null;
-          dragPending = null;
-          if (dragRaf !== 0) {
-            window.cancelAnimationFrame(dragRaf);
-            dragRaf = 0;
-          }
-          document.body.classList.remove("dsr-win-dragging");
-          clearDragTransform();
+      // 拖动：整块面板都能拖，开关只决定「绑不绑 pointerdown」，
+      // DOM 不用重建；正在拖的时候关掉要顺手把这次拖动收干净。
+      if (drag !== null) {
+        try {
+          const target = panelEl !== null ? panelEl : gripEl;
+          if (target !== null) target.releasePointerCapture(drag.pointerId);
+        } catch (err) {
+          // 忽略：没有捕获或已释放
         }
-        gripEl.remove();
-        gripEl = null;
-        ensureGrip();
+        endDragListeners();
+        clearDragTransform();
       }
+      ensurePanelDrag();
       // 还原：关掉时不能停在最小化状态，否则窗口就卡在一条里出不来了
       if (!featureOn("restore") && minimized === true) {
         setMinimized(false);

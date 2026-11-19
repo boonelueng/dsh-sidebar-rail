@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.4",
+      version: "1.0.5",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },
@@ -171,8 +171,8 @@ window.__ModuleLoader__.load({
       },
       {
         key: "drag",
-        label: "按住标题栏拖动",
-        desc: "按住设置窗口顶部标题栏，把它拖到任意位置",
+        label: "按住任意位置拖动",
+        desc: "按住设置窗口的任意位置（按钮、输入框等交互元素除外）把它拖走",
       },
       {
         key: "restore",

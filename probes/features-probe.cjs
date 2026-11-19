@@ -130,6 +130,30 @@ async function main() {
       await sleep(360);
     };
 
+    // 在面板正文里现找一个非交互落点：拖动入口在整块面板上，
+    // 探针不该写死「抓手」坐标，否则测的还是老路径。
+    const freePoint = () => evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return { x: 0, y: 0 };
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const r = p.getBoundingClientRect();
+      for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
+        for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
+          const el = document.elementFromPoint(x, y);
+          if (!el || !p.contains(el) || el.closest(bad)) continue;
+          return { x: x, y: y };
+        }
+      }
+      return { x: Math.round(r.left) + 40, y: Math.round(r.top) + 90 };
+    })()`);
+    // 只读地读一下「当前这块面板是否表现为可拖动」：属性 + 落在某点时的实际光标
+    const dragReadOnly = (pt) => evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return { attr: null, cursor: null };
+      const el = document.elementFromPoint(${Math.round(pt.x)}, ${Math.round(pt.y)}) || p;
+      return { attr: p.getAttribute('data-dsh-rail-win-drag'), cursor: getComputedStyle(el).cursor };
+    })()`);
+
     const boot = async (label) => {
       await c.send("Page.navigate", { url: PAGE });
       let ready = false;
@@ -328,22 +352,32 @@ async function main() {
     check("重新打开最大化后绿点恢复可用",
       p7 && p7.max && p7.max.disabled === false && p7.max.ariaDisabled === null, p7 && p7.max);
 
-    // ------------------------------------------------- 5. 关掉「按住标题栏拖动」
+    // ------------------------------------------------- 5. 关掉「拖动面板移动窗口」
+    // 拖动入口已经提升到整块面板（任意位置都能拖），所以这里也从面板正文起拖，
+    // 不再依赖抓手——抓手现在只负责「最小化后点一下还原」与双击。
     await clickFeature("drag");
     const g1 = await panelBox();
-    await dragBy({ x: g1.panel.x + 40, y: g1.grip.y + Math.round(g1.grip.h / 2) }, -160, 90);
+    const g1Point = await freePoint();
+    const g1Drag = await dragReadOnly(g1Point);
+    await dragBy(g1Point, -160, 90);
     const g2 = await panelBox();
-    check("关掉拖动后拖标题栏窗口不动",
-      Math.abs(g2.panel.x - g1.panel.x) <= 2 && Math.abs(g2.panel.y - g1.panel.y) <= 2,
-      { before: g1.panel, after: g2.panel });
+    check("关掉拖动后拖面板任意位置窗口都不动",
+      g2.panel !== null && Math.abs(g2.panel.x - g1.panel.x) <= 2 && Math.abs(g2.panel.y - g1.panel.y) <= 2,
+      { before: g1.panel, after: g2.panel, from: g1Drag });
+    check("关掉拖动后面板不再显示可拖动光标",
+      g1Drag.attr !== "1" && g1Drag.cursor !== "grab", g1Drag);
 
     await clickFeature("drag");
     const g3 = await panelBox();
-    await dragBy({ x: g3.panel.x + 40, y: g3.grip.y + Math.round(g3.grip.h / 2) }, -160, 90);
+    const g3Point = await freePoint();
+    // 光标要在拖之前读：拖完窗口已经挪走，旧坐标就不落在面板上了
+    const g3Drag = await dragReadOnly(g3Point);
+    check("重新打开拖动后面板恢复可拖动光标", g3Drag.attr === "1" && g3Drag.cursor === "grab", g3Drag);
+    await dragBy(g3Point, 120, 90);
     const g4 = await panelBox();
-    check("重新打开拖动后能拖动窗口",
+    check("重新打开拖动后能从面板正文拖动窗口",
       Math.abs(g4.panel.x - g3.panel.x) > 40 || Math.abs(g4.panel.y - g3.panel.y) > 20,
-      { before: g3.panel, after: g4.panel });
+      { before: g3.panel, after: g4.panel, from: g3Point });
     await shot("shot-features-dragged.png");
 
     // ------------------------------------------------- 6. 刷新后状态保持
