@@ -192,6 +192,28 @@ window.__ModuleLoader__.load({
       "position:fixed!important;",
       "border-radius:var(--dsw-radius-panel,12px)!important;",
       "}",
+
+      /* ---- 液态玻璃：把设置面板改成毛玻璃质感 ----
+         面板背景从官方的不透明 layer-2 改成半透明（约 66% 不透明），
+         再叠 backdrop-filter 的 blur + saturate：blur 把背后主界面揉成雾面、
+         saturate 提升透出颜色的饱和度，这是液态玻璃区别于普通毛玻璃的关键。
+         顶部一条白色高光 + 一圈 1px 内描边模拟玻璃棱角的反光；
+         保留官方 elevation 投影，让面板仍「浮」在遮罩之上。
+         半透明比例取偏保守的 66%，保证文字对比度不因透色而跌穿 4.5:1。 */
+      "[data-dsh-rail-win]{",
+      "backdrop-filter:blur(22px) saturate(170%)!important;",
+      "-webkit-backdrop-filter:blur(22px) saturate(170%)!important;",
+      "background:color-mix(in srgb, var(--dsw-alias-bg-layer-2,#1b1b20) 66%, transparent)!important;",
+      "box-shadow:inset 0 1px 0 rgba(255,255,255,.16),inset 0 0 0 1px rgba(255,255,255,.10),var(--dsw-elevation-prominent)!important;",
+      "}",
+      /* 尊重系统「减少透明」偏好：回退为不透明背景，避免文字糊在透出的内容上 */
+      "@media (prefers-reduced-transparency: reduce){",
+      "[data-dsh-rail-win]{",
+      "backdrop-filter:none!important;-webkit-backdrop-filter:none!important;",
+      "background:var(--dsw-alias-bg-layer-2)!important;",
+      "box-shadow:var(--dsw-elevation-prominent)!important;",
+      "}",
+      "}",
     ].join("\n");
 
     function installStyles() {
