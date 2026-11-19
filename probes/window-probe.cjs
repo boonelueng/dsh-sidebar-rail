@@ -318,17 +318,74 @@ async function main() {
         afterOffset: d1.lights && d1.panel ? [d1.lights.x - d1.panel.x, d1.lights.y - d1.panel.y] : null });
     await shot("shot-window-dragged.png");
 
+    // ---------------------- 2a. 拖动期降级：摘掉 backdrop-filter，松手立即还回来
+    // 拖起来卡的真因是合成器必须按新位置重算背后模糊，所以拖动期间必须摘掉。
+    // 这里按住不放时读一次样式，松手后再读一次 —— 只看 CSS 写没写是不够的，
+    // 必须读到「计算后的 backdrop-filter 真的是 none」。
+    const readDragStyles = () => evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return null;
+      const cs = getComputedStyle(p);
+      return { attr: p.getAttribute('data-dsh-rail-win-dragging'), backdrop: cs.backdropFilter || cs.webkitBackdropFilter || '', willChange: cs.willChange };
+    })()`);
+    const dragPoint2 = await evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return null;
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const r = p.getBoundingClientRect();
+      for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
+        for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
+          const el = document.elementFromPoint(x, y);
+          if (!el || !p.contains(el) || el.closest(bad)) continue;
+          return { x: x, y: y };
+        }
+      }
+      return null;
+    })()`);
+    if (dragPoint2 !== null) {
+      const beforeDragStyle = await readDragStyles();
+      await mouse("mousePressed", dragPoint2.x, dragPoint2.y);
+      // 必须超过 3px 阈值才算真的拖起来，否则降级标记不会置上
+      await mouse("mouseMoved", dragPoint2.x + 30, dragPoint2.y + 20);
+      await sleep(80);
+      const midDragStyle = await readDragStyles();
+      await mouse("mouseMoved", dragPoint2.x + 60, dragPoint2.y + 40);
+      await sleep(80);
+      await mouse("mouseReleased", dragPoint2.x + 60, dragPoint2.y + 40);
+      await sleep(420);
+      const afterDragStyle = await readDragStyles();
+      result.steps.dragDowngrade = { before: beforeDragStyle, mid: midDragStyle, after: afterDragStyle };
+      check("拖动中面板挂上降级标记（data-dsh-rail-win-dragging=1）",
+        midDragStyle !== null && midDragStyle.attr === "1", midDragStyle);
+      check("拖动中真的摘掉了 backdrop-filter（不再每帧重算背后模糊）",
+        midDragStyle !== null && String(midDragStyle.backdrop).indexOf("blur") < 0, midDragStyle && midDragStyle.backdrop);
+      check("拖动中面板被提成独立图层（will-change: transform）",
+        midDragStyle !== null && /transform/.test(String(midDragStyle.willChange)), midDragStyle && midDragStyle.willChange);
+      check("松手后降级标记被摘掉",
+        afterDragStyle !== null && afterDragStyle.attr === null, afterDragStyle);
+      check("松手后液态玻璃的模糊原样回来",
+        afterDragStyle !== null && /blur/.test(String(afterDragStyle.backdrop)), afterDragStyle && afterDragStyle.backdrop);
+      check("拖动前本来就带模糊（说明降级确实是拖动才触发）",
+        beforeDragStyle !== null && /blur/.test(String(beforeDragStyle.backdrop)), beforeDragStyle && beforeDragStyle.backdrop);
+    } else {
+      check("拖动中面板挂上降级标记（data-dsh-rail-win-dragging=1）", false, "找不到落点");
+    }
+
     // ------------------------------------ 2b. 任意位置拖动 vs 交互元素不吃事件
+    // 2a 又拖了一次窗口，d1 的坐标已经过期，这里重新取快照再往下走
     // 这是本次需求的核心，也是唯一会踩坏旧功能的点：
     //   ① 标题栏里的「设置」二字（非交互元素）也能拖；
     //   ② 按在按钮上拖动，窗口不能跟着走（否则点按钮会变成拖窗口）；
     //   ③ 点按钮仍然照常触发它自己的动作（事件没被拖动逻辑吞掉）。
+    // 2a 又拖过一次窗口，d1 / titlePt 的坐标已经过期（拿旧坐标去按会按到遮罩上、把窗口关掉），
+    // 所以从这里开始一律用现取的快照。
+    const d2 = await panelBox();
     const titlePt = (() => {
-      const t = d1.title;
+      const t = d2.title;
       return t ? { x: Math.round(t.x + Math.min(30, t.w / 2)), y: Math.round(t.y + 34) } : null;
     })();
     if (titlePt !== null) {
-      const before2 = d1.panel;
+      const before2 = d2.panel;
       await dragBy(titlePt, -80, 60, 6);
       const after2 = await panelBox();
       check("按住左侧「设置」标题也能拖动窗口（标题栏不再是唯一入口）",
@@ -341,7 +398,7 @@ async function main() {
       check("按住左侧「设置」标题也能拖动窗口（标题栏不再是唯一入口）", false, "找不到标题元素");
     }
 
-    const afterTitleDrag = result.steps.draggedFromTitle || d1;
+    const afterTitleDrag = result.steps.draggedFromTitle || d2;
     // 按在官方 × 上拖：窗口必须纹丝不动（那个按钮归官方管）
     const closePt = centerOf(afterTitleDrag.closeBtn);
     const beforeBtnDrag = afterTitleDrag.panel;
@@ -497,40 +554,48 @@ async function main() {
     check("全程没有 diag 错误", (result.steps.diag.errors || []).filter((e) => String(e).indexOf("window:") === 0).length === 0, result.steps.diag.errors);
 
     // ------------------------------------------------- 8. 拖动过程无长任务
+    // 这里刻意用**真实鼠标输入**（CDP Input.dispatchMouseEvent）来拖，而不是自己
+    // dispatchEvent 派发合成的 PointerEvent —— 合成事件不经过浏览器的事件处理与
+    // 合成流程，鼠标移动再快也压不出卡顿，那样测出来的「0 长任务」是假的。
     await openSettings();
-    result.steps.longTasks = await evalJs(`(async () => {
+    const longTaskStart = await evalJs(`(() => {
       const res = { count: 0, max: 0, list: [] };
       const obs = new PerformanceObserver((list) => {
         for (const e of list.getEntries()) { res.count++; res.max = Math.max(res.max, Math.round(e.duration)); res.list.push(Math.round(e.duration)); }
       });
-      try { obs.observe({ entryTypes: ['longtask'] }); } catch (e) { return { unsupported: true }; }
+      try { obs.observe({ entryTypes: ['longtask'] }); } catch (e) { window.__PO__ = null; return { unsupported: true }; }
+      window.__PO__ = { res: res, obs: obs };
+      return { ok: true };
+    })()`);
+    const stressPoint = await evalJs(`(() => {
       const p = window.__HARNESS__.panel();
-      if (!p) { obs.disconnect(); return { unsupported: true }; }
-      // 从面板正文里找一个非交互落点来压测（拖动入口已经不在抓手上）
+      if (!p) return null;
       const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
-      const pr = p.getBoundingClientRect();
-      let target = null, x0 = 0, y0 = 0;
-      outer: for (let y = Math.round(pr.bottom) - 40; y > pr.top + 60; y -= 12) {
-        for (let x = Math.round(pr.left) + 24; x < pr.right - 24; x += 24) {
+      const r = p.getBoundingClientRect();
+      for (let y = Math.round(r.bottom) - 60; y > r.top + 60; y -= 12) {
+        for (let x = Math.round(r.left) + 30; x < r.right - 200; x += 24) {
           const el = document.elementFromPoint(x, y);
           if (!el || !p.contains(el) || el.closest(bad)) continue;
-          target = el; x0 = x; y0 = y; break outer;
+          return { x: x, y: y };
         }
       }
-      if (!target) { obs.disconnect(); return { unsupported: true }; }
-      const ev = (type, x, y) => target.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1, pointerId: 1 }));
-      ev('pointerdown', x0, y0);
-      for (let i = 1; i <= 30; i++) {
-        ev('pointermove', x0 + i * 4, y0 + i * 2);
-        await new Promise((r2) => requestAnimationFrame(() => r2()));
-      }
-      ev('pointerup', x0 + 120, y0 + 60);
-      await new Promise((r2) => setTimeout(r2, 260));
-      obs.disconnect();
-      return res;
+      return null;
     })()`);
+    if (longTaskStart !== null && longTaskStart.unsupported !== true && stressPoint !== null) {
+      // 40 步 × 16ms ≈ 640ms 的连续拖动，足够覆盖若干帧
+      await dragBy(stressPoint, 200, 120, 40);
+      result.steps.longTasks = await evalJs(`(() => {
+        if (!window.__PO__) return { unsupported: true };
+        window.__PO__.obs.disconnect();
+        const res = window.__PO__.res;
+        window.__PO__ = null;
+        return res;
+      })()`);
+    } else {
+      result.steps.longTasks = { unsupported: true };
+    }
     const lt = result.steps.longTasks;
-    check("拖动全程无超过 80ms 的长任务",
+    check("用真实鼠标拖动 40 步，全程无超过 80ms 的长任务",
       lt && lt.unsupported === true ? true : (!lt || lt.max <= 80),
       lt);
   } catch (err) {

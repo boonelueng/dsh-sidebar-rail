@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.5",
+      version: "1.0.6",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },

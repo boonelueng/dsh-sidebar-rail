@@ -67,6 +67,10 @@ window.__ModuleLoader__.load({
      * 光标立刻退回常态，不会出现「看起来能拖其实拖不动」。
      */
     const ATTR_DRAG = "data-dsh-rail-win-drag";
+    /** 拖动进行中的标记。挂上时样式表会摘掉面板的 backdrop-filter：
+        拖着 translate3d 跑的时候，模糊层每一帧都要按新的位置重算背后内容，
+        这是拖起来发涩、掉帧的主因。松手立刻摘掉，玻璃质感原样回来。 */
+    const ATTR_DRAGGING = "data-dsh-rail-win-dragging";
     const STORAGE_WIN = "dsh-sidebar-rail.win.v1";
     const PANEL_SEL = '[data-shortcut-modal="settings"]';
     const TITLE_SEL = '[data-dsh-rail-win-title="1"]';
@@ -185,7 +189,11 @@ window.__ModuleLoader__.load({
       "[data-dsh-rail-win][data-dsh-rail-win-drag='1'] a[href]{cursor:pointer}",
       "[data-dsh-rail-win][data-dsh-rail-win-drag='1'] input,"
         + "[data-dsh-rail-win][data-dsh-rail-win-drag='1'] textarea{cursor:text}",
-      "body.dsr-win-dragging,body.dsr-win-dragging *{cursor:grabbing!important;user-select:none!important}",
+      /* 拖动中：面板内所有子元素本来就 cursor:inherit（见上面那条），
+         所以只要盯住面板本身与 body 就够，不必用 `*` 去扫整棵文档树——
+         那种写法在 DSH 这种巨型 DOM 上，每次加/摘 class 都是一次全站样式重算。 */
+      "body.dsr-win-dragging{cursor:grabbing!important;user-select:none!important}",
+      "body.dsr-win-dragging [data-dsh-rail-win]{cursor:grabbing!important}",
 
       /* 官方 header 行抬到抓手之上：抓手是覆盖整条标题栏的绝对定位层（z-index:0），
          红绿灯现在住在 header 里，若不抬高就会被抓手盖住、点不到。 */
@@ -291,6 +299,18 @@ window.__ModuleLoader__.load({
       "background:var(--dsw-alias-bg-layer-2)!important;",
       "box-shadow:var(--dsw-elevation-prominent)!important;",
       "}",
+      "}",
+
+      /* ---- 拖动期降级（关键性能修复）----
+         拖动只写 transform，本该由合成器直接搬运；但面板开着 backdrop-filter 时，
+         合成器必须按「新的位置」重新采样背后内容再做模糊，等于每帧一次全屏重算，
+         真实机器上表现为明显卡顿。这里在拖动的整个过程中把模糊摘掉，
+         换成接近不透明的纯色背景（视觉上几乎察觉不到，因为手在动），
+         松手立即恢复玻璃质感。will-change 让浏览器提前把面板提成独立图层。 */
+      "[data-dsh-rail-win][data-dsh-rail-win-dragging=\"1\"]{",
+      "backdrop-filter:none!important;-webkit-backdrop-filter:none!important;",
+      "background:var(--dsw-alias-bg-layer-2,#1b1b20)!important;",
+      "will-change:transform!important;",
       "}",
     ].join("\n");
 
@@ -785,9 +805,8 @@ window.__ModuleLoader__.load({
       // 拖动期间只写 transform：由合成器处理，不触发布局。
       // 抓手与圆点都是面板的子节点，跟着面板一起动，不能再单独写一遍（会位移翻倍）。
       panelEl.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
-      if (diag !== null && diag.window !== null && diag.window !== undefined) {
-        diag.window.dragging = { dx: dx, dy: dy };
-      }
+      // 刻意不在这里写 diag：diag 每帧一变会让诊断上报每 1.5s 白报一次，
+      // 而那些上报也要序列化 DOM 快照。拖动位移只在松手时记一次。
     }
 
     function clearDragTransform() {
@@ -805,7 +824,17 @@ window.__ModuleLoader__.load({
       }
       dragPending = null;
       drag = null;
+      clearDraggingAttr();
       if (document.body.classList.contains("dsr-win-dragging")) document.body.classList.remove("dsr-win-dragging");
+    }
+
+    /** 拖动降级属性的开关：置上时摘掉 backdrop-filter，让合成器能直接搬图层。 */
+    function markDraggingAttr() {
+      if (panelEl !== null && panelEl.getAttribute(ATTR_DRAGGING) !== "1") panelEl.setAttribute(ATTR_DRAGGING, "1");
+    }
+
+    function clearDraggingAttr() {
+      if (panelEl !== null && panelEl.hasAttribute(ATTR_DRAGGING)) panelEl.removeAttribute(ATTR_DRAGGING);
     }
 
     function onDragPointerDown(event) {
@@ -846,6 +875,9 @@ window.__ModuleLoader__.load({
         if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
         drag.active = true;
         document.body.classList.add("dsr-win-dragging");
+        // 拖动期间摘掉面板的 backdrop-filter：模糊层跟着 translate3d 每帧重算背后内容，
+        // 是拖起来发涩的主因。松手（endDragListeners）立刻摘掉标记，玻璃质感回来。
+        markDraggingAttr();
         // 确认是拖动之后才捕获：鼠标滑出面板范围也继续跟手，
         // 而且此时点击已经不会被误伤（这次按下本来就不是点）。
         try {
@@ -912,6 +944,7 @@ window.__ModuleLoader__.load({
       releaseCloseDot();
       if (panelEl !== null) {
         panelEl.removeAttribute(ATTR_WIN);
+        panelEl.removeAttribute(ATTR_DRAGGING);
         panelEl.removeAttribute("data-dsh-rail-win-min");
         panelEl.removeAttribute("data-dsh-rail-win-max");
         // 注意：不能摘 data-shortcut-modal —— 那是官方自己的标记，
@@ -1030,6 +1063,10 @@ window.__ModuleLoader__.load({
         }
         lastAdoptNote = "";
       }
+      // 正在拖动时不做「重新对齐」：位置此刻由 transform 表达，
+      // 而 applyWindow 里的 getBoundingClientRect + getComputedStyle 会强制同步布局，
+      // 每帧一次就是拖动卡顿的第二大来源。松手后 applyWindow 会补上最终落位。
+      if (drag !== null) return;
       stealAutofocusFocus();
       // 位置与尺寸可能被官方重新写回过（React 重渲染），这里对齐一次
       applyWindow();
@@ -1045,12 +1082,40 @@ window.__ModuleLoader__.load({
       startWatchFallback();
       if (typeof MutationObserver !== "function") return;
       observer = new MutationObserver(function (records) {
+        // 只关心「和设置面板有关的结构变化」。
+        //
+        // 原来这里是「document.body 下任何一次 childList 变化都排一次 tick」，
+        // 而 DSH 会话区是流式输出的：token 一多，每秒能产生几十次 childList，
+        // 每次都换来一次 querySelector + applyWindow（后者带 getBoundingClientRect
+        // 与 getComputedStyle，是强制同步布局）。设置窗口开着的时候拖动就卡在这里。
+        //
+        // 现在只在这三种情况下排 tick：
+        //   1) 还没有接管任何面板 —— 需要靠观察器去发现新挂载的面板；
+        //   2) 变化落在面板内部 —— 可能是官方重渲染把我们的子节点冲掉了；
+        //   3) 增删的节点里有面板（含整棵子树被替换，即打开/关闭设置）。
+        // 其余（会话区流式追加、侧边栏刷新…）一律忽略。
         for (const record of records) {
-          // 只关心「结构变化」：面板被挂载 / 卸载。样式属性变化由我们自己写，忽略掉，
-          // 否则每写一次样式都会回头触发一轮 tick，形成自激。
-          if (record.type === "childList") {
+          if (record.type !== "childList") continue;
+          if (panelEl === null) {
             schedule();
             return;
+          }
+          const target = record.target;
+          if (target instanceof Node && (target === panelEl || panelEl.contains(target) || target.contains(panelEl))) {
+            schedule();
+            return;
+          }
+          for (const node of record.addedNodes) {
+            if (node instanceof Element && (node === panelEl || panelEl.contains(node) || node.contains(panelEl) || node.querySelector(PANEL_SEL) !== null)) {
+              schedule();
+              return;
+            }
+          }
+          for (const node of record.removedNodes) {
+            if (node instanceof Element && (node === panelEl || node.contains(panelEl) || node.querySelector(PANEL_SEL) !== null)) {
+              schedule();
+              return;
+            }
           }
         }
       });
@@ -1074,7 +1139,8 @@ window.__ModuleLoader__.load({
     }
 
     function onResize() {
-      if (panelEl === null) return;
+      // 拖动中改窗口大小没有意义，而且 applyWindow 会强制同步布局，直接跳过
+      if (panelEl === null || drag !== null) return;
       applyWindow();
     }
 
