@@ -66,10 +66,14 @@ window.__ModuleLoader__.load({
       { value: "url", label: "打开链接" },
     ];
 
+    // 注意：子 chunk（client.drag/float/settings/window.js）的缓存 rev 由「本文件」的
+    // mtime/ctime/size 决定，而非各子 chunk 自身。改完任何一个子 chunk 后，必须让本文件
+    // 也发生变化（bump 下方 version 或任何实质改动），否则子 chunk 的 URL rev 不变，
+    // 浏览器按 immutable 缓存继续用旧子 chunk —— 这正是「改了窗口代码但重启后无变化」的根因。
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.0",
+      version: "1.0.1",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },
