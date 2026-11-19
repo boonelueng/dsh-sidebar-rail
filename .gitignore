@@ -20,3 +20,5 @@ probes/rel*/
 
 # 依赖
 node_modules/
+
+commit-msg*.txt

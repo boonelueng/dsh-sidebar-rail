@@ -167,6 +167,11 @@ async function main() {
         min: p && p.getAttribute('data-dsh-rail-win-min'),
         max: p && p.getAttribute('data-dsh-rail-win-max'),
         grip: box(document.querySelector('[data-dsh-rail-win-grip]')),
+        header: box(document.querySelector('[data-dsh-rail-win-header]')),
+        // 官方 × 必须是 header 的直系子按钮：红绿灯自己的 .dsr-light-close 也含 "close"，
+        // 且住在 header 里面，用后代选择器会先命中它，断言就成了「红绿灯在自己左边」。
+        // 属性值在 CSS 里大小写敏感，官方是 VOzbGW_close、回归台是 stClose，所以带 i 标志。
+        closeBtn: box(p && p.querySelector('[data-dsh-rail-win-header] > button[class*="close" i]')),
         position: p && getComputedStyle(p).position,
         vw: window.innerWidth, vh: window.innerHeight,
         railRight: Math.round(window.__HARNESS__.root().getBoundingClientRect().right),
@@ -192,12 +197,15 @@ async function main() {
       o.dots[1].cls.indexOf("dsr-light-min") >= 0 && o.dots[1].bg === "rgb(254, 188, 46)" &&
       o.dots[2].cls.indexOf("dsr-light-max") >= 0 && o.dots[2].bg === "rgb(40, 200, 64)",
       o.dots.map((d) => d.cls + " " + d.bg));
-    check("红绿灯在窗口右上角（靠右、靠上）",
-      o.lights !== null && o.panel !== null &&
-      o.panel.x + o.panel.w - (o.lights.x + o.lights.w) <= 40 &&
-      o.lights.y - o.panel.y <= 40,
-      { panelRight: o.panel ? o.panel.x + o.panel.w : null, lightsRight: o.lights ? o.lights.x + o.lights.w : null,
-        panelTop: o.panel ? o.panel.y : null, lightsTop: o.lights ? o.lights.y : null });
+    check("红绿灯住在官方 header 行里（不再是飘在右上角的绝对定位）",
+      o.lights !== null && o.header !== null &&
+      o.lights.x >= o.header.x - 1 && o.lights.x + o.lights.w <= o.header.x + o.header.w + 1 &&
+      o.lights.y >= o.header.y - 1 && o.lights.y + o.lights.h <= o.header.y + o.header.h + 1,
+      { header: o.header, lights: o.lights });
+    check("红绿灯排在官方 × 的左边，不与之重叠",
+      o.lights !== null && o.closeBtn !== null &&
+      o.lights.x + o.lights.w <= o.closeBtn.x + 1,
+      { lightsRight: o.lights ? o.lights.x + o.lights.w : null, closeBtnLeft: o.closeBtn ? o.closeBtn.x : null });
     check("接管后打上了 data-dsh-rail-win", o.attr === "1", o.attr);
     check("拖动抓手存在", o.grip !== null, o.grip);
     await shot("shot-window-open.png");
@@ -218,10 +226,12 @@ async function main() {
     check("拖动后位置写进 localStorage",
       d1.stored !== null && (() => { try { const s = JSON.parse(d1.stored); return s.mode === "dragged"; } catch (e) { return false; } })(),
       d1.stored);
-    check("红绿灯跟着窗口走（仍贴在右上角）",
-      d1.lights !== null && d1.panel !== null &&
-      Math.abs((d1.panel.x + d1.panel.w) - (d1.lights.x + d1.lights.w)) <= 40,
-      { panelRight: d1.panel.x + d1.panel.w, lightsRight: d1.lights.x + d1.lights.w });
+    check("红绿灯跟着窗口走（与面板的相对偏移不变）",
+      d1.lights !== null && d1.panel !== null && o.lights !== null && o.panel !== null &&
+      Math.abs((d1.lights.x - d1.panel.x) - (o.lights.x - o.panel.x)) <= 2 &&
+      Math.abs((d1.lights.y - d1.panel.y) - (o.lights.y - o.panel.y)) <= 2,
+      { beforeOffset: o.lights && o.panel ? [o.lights.x - o.panel.x, o.lights.y - o.panel.y] : null,
+        afterOffset: d1.lights && d1.panel ? [d1.lights.x - d1.panel.x, d1.lights.y - d1.panel.y] : null });
     await shot("shot-window-dragged.png");
 
     // ------------------------------------------------ 3. 最大化：铺满会话区

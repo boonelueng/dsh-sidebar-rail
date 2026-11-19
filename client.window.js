@@ -54,6 +54,7 @@ window.__ModuleLoader__.load({
     const ATTR_WIN = "data-dsh-rail-win";
     const ATTR_GRIP = "data-dsh-rail-win-grip";
     const ATTR_LIGHTS = "data-dsh-rail-win-lights";
+    const ATTR_HEADER = "data-dsh-rail-win-header";
     const STORAGE_WIN = "dsh-sidebar-rail.win.v1";
     const PANEL_SEL = '[data-shortcut-modal="settings"]';
     const TITLE_SEL = '[data-dsh-rail-win-title="1"]';
@@ -139,11 +140,20 @@ window.__ModuleLoader__.load({
       "}",
       "body.dsr-win-dragging{cursor:grabbing!important;user-select:none!important}",
 
-      /* 红绿灯：固定在面板右上角，永远压在抓手之上。 */
-      "[data-dsh-rail-win] > [data-dsh-rail-win-lights]{",
-      "position:absolute;right:12px;",
+      /* 官方 header 行抬到抓手之上：抓手是覆盖整条标题栏的绝对定位层（z-index:0），
+         红绿灯现在住在 header 里，若不抬高就会被抓手盖住、点不到。 */
+      "[data-dsh-rail-win] > [data-dsh-rail-win-header]{",
+      "position:relative;z-index:2;",
+      "}",
+
+      /* 红绿灯：排在官方 header 行里、官方 × 的左边。
+         官方 header 本身是 display:flex + align-items:flex-start，插进去就由 flex 排版，
+         所以这里只留静态流内样式——不再绝对定位到面板右上角，
+         否则会和官方那行「打开配置文件」+ × 叠在一起。 */
+      "[data-dsh-rail-win-lights]{",
+      "position:static;margin-left:auto;",
       "display:flex!important;align-items:center!important;gap:8px!important;",
-      "z-index:3;",
+      "z-index:auto;",
       "}",
       "[data-dsh-rail-win-lights] .dsr-light{",
       "width:12px;height:12px;border-radius:50%;border:none;padding:0;margin:0;",
@@ -164,7 +174,15 @@ window.__ModuleLoader__.load({
       "grid-template:\"t h\"!important;grid-template-columns:minmax(0,1fr) auto!important;",
       "overflow:hidden!important;",
       "}",
-      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > :not([data-dsh-rail-win-title]):not([data-dsh-rail-win-grip]):not([data-dsh-rail-win-lights]){",
+      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > :not([data-dsh-rail-win-title]):not([data-dsh-rail-win-grip]):not([data-dsh-rail-win-lights]):not([data-dsh-rail-win-header]){",
+      "display:none!important;",
+      "}",
+      /* 最小化时红绿灯住在 header 里，header 必须留着；但 header 自己那几个官方按钮
+         （「打开配置文件」+ ×）在收成一条的状态下没有意义，只留红绿灯。 */
+      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > [data-dsh-rail-win-header]{",
+      "display:flex!important;align-items:center!important;height:100%!important;padding:0 10px 0 0!important;",
+      "}",
+      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > [data-dsh-rail-win-header] > :not([data-dsh-rail-win-lights]){",
       "display:none!important;",
       "}",
       "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] [data-dsh-rail-win-title]{cursor:pointer}",
@@ -347,7 +365,34 @@ window.__ModuleLoader__.load({
         bindLightAction(dots[1], function () { setMinimized(!minimized); });
         bindLightAction(dots[2], toggleMax);
       }
-      panelEl.appendChild(lightsEl);
+      // 挂进官方 header 行，排在官方 × 的左边——由 header 自己的 flex 排版，
+      // 不再绝对定位，所以不会和「打开配置文件」+ × 叠在一起。
+      //
+      // 注意别挂进 header 里那个 actions 容器：它自己带 margin-left:auto，
+      // 会把整组顶到最右，而官方 × 在 actions 外面，挂进去反而排到 × 的右边。
+      // 官方 × 的 class 带构建哈希（VOzbGW_close），回归台是 stClose，
+      // 所以按子串 + 忽略大小写认；认不出就退到 header 里最后一个非红绿灯按钮
+      // （× 总是最后一个）。必须排掉红绿灯自己——.dsr-light-close 也含 "close"。
+      if (headerEl !== null) {
+        let closeBtn = null;
+        const buttons = headerEl.querySelectorAll("button");
+        for (let i = buttons.length - 1; i >= 0; i -= 1) {
+          const btn = buttons[i];
+          if (btn.closest("[data-dsh-rail-win-lights]") !== null) continue;
+          if (btn.className && /close/i.test(String(btn.className))) {
+            closeBtn = btn;
+            break;
+          }
+          if (closeBtn === null) closeBtn = btn;
+        }
+        if (closeBtn !== null && closeBtn.parentElement !== null) {
+          closeBtn.parentElement.insertBefore(lightsEl, closeBtn);
+        } else {
+          headerEl.appendChild(lightsEl);
+        }
+      } else {
+        panelEl.appendChild(lightsEl);
+      }
       syncDots();
     }
 
@@ -471,17 +516,14 @@ window.__ModuleLoader__.load({
         }
       }
 
-      // ---- 抓手与红绿灯的纵向位置跟着标题行走
+      // ---- 抓手的纵向位置跟着标题行走
+      // 红绿灯已经住进官方 header 行，纵向由那行的 flex 排版决定，不再需要这里写 top。
       const barTop = computeTitleBarTop();
       if (gripEl !== null) {
         const wanted = barTop + "px";
         if (gripEl.style.height !== "54px") gripEl.style.height = "54px";
         if (gripEl.style.top !== "0px") gripEl.style.top = "0px";
         if (gripEl.dataset.barTop !== wanted) gripEl.dataset.barTop = wanted;
-      }
-      if (lightsEl !== null) {
-        const wanted = Math.max(4, barTop + 6) + "px";
-        if (lightsEl.style.top !== wanted) lightsEl.style.top = wanted;
       }
 
       // ---- 诊断
@@ -502,25 +544,38 @@ window.__ModuleLoader__.load({
 
     // ------------------------------------------------------------- 三个动作
     /**
-     * 关窗：先记下面板当前占位，把面板藏起来，再走官方关闭路径。
+     * 关窗：走官方自己的关闭路径。
      *
-     * 为什么不能直接调 closeHandler：官方关闭是「React 里 setState」，
-     * 在真实宿主上要等一次提交才会从 DOM 摘掉面板，这中间的几十毫秒里
-     * 用户已经点回去了、或者又被别的事件重开，窗口就会「关不掉」。
-     * 所以先把面板从视觉上藏掉（visibility，保留布局，不影响官方的卸载测量）。
+     * 官方设置弹窗的关闭处理器只挂在两处（见 dsh-client-ui-settings-general 的
+     * SettingsPanel）：遮罩 div.mask[aria-hidden="true"] 的 onClick，以及 header 里
+     * 那个 button.close。overlay 本身没有任何 React 处理器——往 overlay 上派发 click
+     * 是打空的，这正是旧版「点红灯后页面残留一层黑色遮罩」的原因：面板被
+     * visibility:hidden 藏掉了，但 overlay + mask 还在，于是整页被蒙上一层黑。
+     *
+     * 所以这里按「遮罩 → 官方 × → 兜底」的顺序派发真实 click，让 React 自己卸载整个
+     * overlay。不再自己藏面板：半截操作会留下这层黑。
      */
     function closeWindow() {
-      if (panelEl !== null) panelEl.style.setProperty("visibility", "hidden");
-      if (panelEl !== null && typeof panelEl.__dsrNativeClose === "function") {
-        panelEl.__dsrNativeClose();
-        return;
+      // 1) 遮罩：官方唯一挂在「点外面关闭」上的处理器
+      if (overlayEl !== null) {
+        let mask = overlayEl.querySelector('[aria-hidden="true"]');
+        if (mask === null) mask = overlayEl.querySelector('[class*="mask"]');
+        if (mask !== null) {
+          mask.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+          return;
+        }
       }
-      if (typeof closeHandler === "function") {
-        closeHandler();
-        return;
+      // 2) 官方右上角那个 × 按钮
+      if (panelEl !== null) {
+        let nativeClose = panelEl.querySelector('button[class*="close"]');
+        if (nativeClose === null) nativeClose = findNativeCloseButton();
+        if (nativeClose !== null) {
+          nativeClose.click();
+          return;
+        }
       }
-      // 官方在 overlay 上挂了点击关闭，退一步也能用同样的路径
-      if (overlayEl !== null) overlayEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      // 3) 最后才是记下来的关闭回调（它内部也是点同一个 ×）
+      if (typeof closeHandler === "function") closeHandler();
     }
 
     function setMinimized(next) {
@@ -576,7 +631,7 @@ window.__ModuleLoader__.load({
       // 拖动期间只写 transform：由合成器处理，不触发布局
       panelEl.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
       if (gripEl !== null) gripEl.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
-      if (lightsEl !== null) lightsEl.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
+      // 红绿灯住在 header 里，跟着面板的 transform 一起动，不能再单独写一遍（会位移翻倍）
       if (diag !== null && diag.window !== null && diag.window !== undefined) {
         diag.window.dragging = { dx: dx, dy: dy };
       }
@@ -585,7 +640,6 @@ window.__ModuleLoader__.load({
     function clearDragTransform() {
       if (panelEl !== null && panelEl.style.transform !== "") panelEl.style.transform = "";
       if (gripEl !== null && gripEl.style.transform !== "") gripEl.style.transform = "";
-      if (lightsEl !== null && lightsEl.style.transform !== "") lightsEl.style.transform = "";
     }
 
     function onGripPointerDown(event) {
@@ -764,6 +818,8 @@ window.__ModuleLoader__.load({
         return;
       }
       titleEl.setAttribute("data-dsh-rail-win-title", "1");
+      // 红绿灯要住进 header 行：先给它打上标记，样式表按这个属性把 header 抬到抓手之上
+      if (headerEl !== null) headerEl.setAttribute(ATTR_HEADER, "1");
 
       const nativeClose = findNativeCloseButton();
       if (nativeClose !== null) {
