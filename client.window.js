@@ -133,6 +133,11 @@ window.__ModuleLoader__.load({
     let drag = null;
     let dragRaf = 0;
     let dragPending = null;
+    // 松手后延迟恢复玻璃质感的 rAF 句柄（见 settleDragging 的说明）
+    let settleRaf = 0;
+    // 上一次量到的面板自然尺寸。落位那一帧要用它跳过 getComputedStyle，
+    // 少一次强制同步布局 —— 详见 applyWindow 的 skipMeasure 参数。
+    let lastNatural = null;
 
     // ---------------------------------------------------------------- 持久化
     function loadState() {
@@ -305,11 +310,12 @@ window.__ModuleLoader__.load({
          拖动只写 transform，本该由合成器直接搬运；但面板开着 backdrop-filter 时，
          合成器必须按「新的位置」重新采样背后内容再做模糊，等于每帧一次全屏重算，
          真实机器上表现为明显卡顿。这里在拖动的整个过程中把模糊摘掉，
-         换成接近不透明的纯色背景（视觉上几乎察觉不到，因为手在动），
-         松手立即恢复玻璃质感。will-change 让浏览器提前把面板提成独立图层。 */
+         松手之后再把玻璃质感还回来。
+         **只摘 blur，不改 background**：背景色保持和常驻态一模一样（同一条
+         color-mix 半透明），这样松手恢复时只有「模糊」这一件事在变，
+         不会再多出一次「底色从实心跳回半透明」的闪烁。 */
       "[data-dsh-rail-win][data-dsh-rail-win-dragging=\"1\"]{",
       "backdrop-filter:none!important;-webkit-backdrop-filter:none!important;",
-      "background:var(--dsw-alias-bg-layer-2,#1b1b20)!important;",
       "will-change:transform!important;",
       "}",
     ].join("\n");
@@ -628,13 +634,27 @@ window.__ModuleLoader__.load({
       return Math.max(4, Math.round(top - pr.top));
     }
 
-    /** 把当前状态完整落到 DOM 上。所有写入都先比对再写，避免无谓的样式重算。 */
-    function applyWindow() {
+    /**
+     * 把当前状态完整落到 DOM 上。所有写入都先比对再写，避免无谓的样式重算。
+     *
+     * skipMeasure：跳过 getBoundingClientRect + getComputedStyle 那一步，改用上一次
+     * 量到的自然尺寸。松手落位那一帧用得上 —— 那里位置刚要改，再插一次强制同步布局
+     * 等于让浏览器把「还没画的上一帧」先算完，落位就会晚一帧、看着像掉帧。
+     */
+    function applyWindow(skipMeasure) {
       if (panelEl === null) return;
-      const rect = panelEl.getBoundingClientRect();
-      const computed = window.getComputedStyle(panelEl);
-      const naturalWidth = Math.round(parseFloat(computed.width) || rect.width) || rect.width;
-      const naturalHeight = Math.round(parseFloat(computed.height) || rect.height) || rect.height;
+      let naturalWidth;
+      let naturalHeight;
+      if (skipMeasure === true && lastNatural !== null) {
+        naturalWidth = lastNatural.w;
+        naturalHeight = lastNatural.h;
+      } else {
+        const rect = panelEl.getBoundingClientRect();
+        const computed = window.getComputedStyle(panelEl);
+        naturalWidth = Math.round(parseFloat(computed.width) || rect.width) || rect.width;
+        naturalHeight = Math.round(parseFloat(computed.height) || rect.height) || rect.height;
+        lastNatural = { w: naturalWidth, h: naturalHeight };
+      }
 
       // 接管标记：只要被接管就常驻（红绿灯、抓手、最小化规则的样式都挂在这个属性下，
       // 它不随「正常/拖动/最大化」的模式变化而摘除）。
@@ -713,12 +733,16 @@ window.__ModuleLoader__.load({
 
       // ---- 抓手的纵向位置跟着标题行走
       // 红绿灯已经住进官方 header 行，纵向由那行的 flex 排版决定，不再需要这里写 top。
-      const barTop = computeTitleBarTop();
+      // computeTitleBarTop 里要取三次 getBoundingClientRect（又是一次强制同步布局），
+      // 落位那一帧跳过它：抓手的高度与 top 早就是 54px / 0，没必要每帧重算。
       if (gripEl !== null) {
-        const wanted = barTop + "px";
+        if (skipMeasure !== true) {
+          const barTop = computeTitleBarTop();
+          const wanted = barTop + "px";
+          if (gripEl.dataset.barTop !== wanted) gripEl.dataset.barTop = wanted;
+        }
         if (gripEl.style.height !== "54px") gripEl.style.height = "54px";
         if (gripEl.style.top !== "0px") gripEl.style.top = "0px";
-        if (gripEl.dataset.barTop !== wanted) gripEl.dataset.barTop = wanted;
       }
 
       // ---- 诊断
@@ -804,7 +828,24 @@ window.__ModuleLoader__.load({
       dragPending = null;
       // 拖动期间只写 transform：由合成器处理，不触发布局。
       // 抓手与圆点都是面板的子节点，跟着面板一起动，不能再单独写一遍（会位移翻倍）。
-      panelEl.style.transform = "translate3d(" + dx + "px," + dy + "px,0)";
+      //
+      // 这里要把位移**先夹进允许范围**，不能等到松手才夹：
+      // 拖动过程只画 transform，而落位写的是 left/top。若拖过了边界，
+      // 松手那一刻「transform 表达的越界位置」会被丢弃、换成夹过的 left/top，
+      // 面板就在收手瞬间往回弹一段 —— 这就是停靠时的跳帧。
+      // 提前夹好，拖到边界就停住，落位与拖动所见完全一致，收手不动。
+      //
+      // 夹取参数必须和松手时用的完全一致（见 onDragPointerUp 的兜底分支）：
+      // 都传 0,0，语义是「面板左上角留在视口内」。传真实宽高会得到另一组边界
+      // （minX = 80 - w），两边算出不同结果就又会跳。
+      const clamped = clampPos(drag.sx + dx, drag.sy + dy, 0, 0);
+      const cdx = clamped.x - drag.sx;
+      const cdy = clamped.y - drag.sy;
+      // 记下这一帧真正画出去的位置：松手时直接落它，保证「所见即所得」，
+      // 不再拿原始 dx/dy 重算一次（那样会得到另一个夹取结果，收手就跳）。
+      drag.lastX = clamped.x;
+      drag.lastY = clamped.y;
+      panelEl.style.transform = "translate3d(" + cdx + "px," + cdy + "px,0)";
       // 刻意不在这里写 diag：diag 每帧一变会让诊断上报每 1.5s 白报一次，
       // 而那些上报也要序列化 DOM 快照。拖动位移只在松手时记一次。
     }
@@ -824,8 +865,39 @@ window.__ModuleLoader__.load({
       }
       dragPending = null;
       drag = null;
-      clearDraggingAttr();
       if (document.body.classList.contains("dsr-win-dragging")) document.body.classList.remove("dsr-win-dragging");
+      // 注意：这里刻意**不**摘 ATTR_DRAGGING。松手那一刻面板还要换位置，
+      // 摘标记必须挪到位置落定之后（见 settleDragging），否则会闪。
+    }
+
+    function cancelSettle() {
+      if (settleRaf !== 0) {
+        window.cancelAnimationFrame(settleRaf);
+        settleRaf = 0;
+      }
+    }
+
+    /**
+     * 松手后把玻璃质感还回来 —— 但**不是立刻**。
+     *
+     * 之前是在 pointerup 里直接摘掉 ATTR_DRAGGING，于是同一帧做了三件互相打架的事：
+     *   1) 摘掉标记 → backdrop-filter 恢复、will-change 撤掉 → 合成器要把图层重新光栅化；
+     *   2) applyWindow() 写 left/top → 面板换到新位置（从 transform 表达改回布局位置）；
+     *   3) clearDragTransform() 清空 transform → 图层又一次失效。
+     * 三件事挤在一帧里，浏览器只能拿「新的位置 + 还没算好的背景」先画一帧，
+     * 看起来就是落位瞬间闪一下 / 掉一帧。
+     *
+     * 改成两帧分离：第一帧只负责把位置落定（仍是降级态，没有模糊，合成成本最低），
+     * 下一帧再恢复模糊与 will-change。位置动与重光栅化不再抢同一帧。
+     */
+    function settleDragging() {
+      cancelSettle();
+      settleRaf = window.requestAnimationFrame(function () {
+        settleRaf = window.requestAnimationFrame(function () {
+          settleRaf = 0;
+          clearDraggingAttr();
+        });
+      });
     }
 
     /** 拖动降级属性的开关：置上时摘掉 backdrop-filter，让合成器能直接搬图层。 */
@@ -849,7 +921,17 @@ window.__ModuleLoader__.load({
       // 这里刻意不 preventDefault：面板里还有导航、输入框、可选中文字，
       // 在按下阶段就吞掉默认行为会连点击与选中一起废掉。
       // 真正开始拖（移动超过阈值）时才在 pointermove 里 preventDefault。
-      const p = mode === MODE_DRAGGED ? { x: posX, y: posY } : roundRect(panelEl.getBoundingClientRect());
+      //
+      // 上一次松手排的「恢复玻璃」回调还没跑就又按下：先撤掉。
+      // 否则它会在这一轮拖动中间把降级标记摘掉，模糊一回来就得重算，白卡一下。
+      cancelSettle();
+      // 量一次面板当前位置：normal 态还没有 left/top，只能从 rect 取起点。
+      const rect = roundRect(panelEl.getBoundingClientRect());
+      // 顺手把这次量到的尺寸记成「自然尺寸」，松手落位那一帧直接用它，
+      // 就不必再 getComputedStyle 一次（那是强制同步布局）。
+      // 只在 normal/dragged 下记：最大化与最小化量到的不是自然尺寸，记了会污染后续落位。
+      if (mode !== MODE_MAX && minimized !== true) lastNatural = { w: rect.w, h: rect.h };
+      const p = mode === MODE_DRAGGED ? { x: posX, y: posY } : rect;
       drag = {
         x0: event.clientX,
         y0: event.clientY,
@@ -899,6 +981,10 @@ window.__ModuleLoader__.load({
       const startY = live !== null ? live.sy : 0;
       const fromX = live !== null ? live.x0 : 0;
       const fromY = live !== null ? live.y0 : 0;
+      // 最后一帧真正画出去的位置（flushDrag 夹好边界后记下的）。
+      // 有它就照着落位：拖动时看到的和松手后得到的完全一致，收手不跳。
+      const paintedX = live !== null && typeof live.lastX === "number" ? live.lastX : null;
+      const paintedY = live !== null && typeof live.lastY === "number" ? live.lastY : null;
       try {
         // 捕获挂在面板上：鼠标滑出面板范围甚至滑出窗口也继续跟手
         const target = panelEl !== null ? panelEl : gripEl;
@@ -910,16 +996,26 @@ window.__ModuleLoader__.load({
       // 没超过阈值 = 只是点了一下，不算拖动，什么都不用落盘
       if (moved !== true) return;
 
-      const dx = event.clientX - fromX;
-      const dy = event.clientY - fromY;
-      const clamped = clampPos(startX + dx, startY + dy, 0, 0);
-      posX = clamped.x;
-      posY = clamped.y;
+      if (paintedX !== null && paintedY !== null) {
+        posX = paintedX;
+        posY = paintedY;
+      } else {
+        // 没有中间帧（按下后立刻松手、位移已过阈值但 rAF 还没跑）时兜底现算
+        const dx = event.clientX - fromX;
+        const dy = event.clientY - fromY;
+        const clamped = clampPos(startX + dx, startY + dy, 0, 0);
+        posX = clamped.x;
+        posY = clamped.y;
+      }
       // 顺序很关键：先把 transform 清掉再写 left/top 会闪一帧；
       // 这里反过来——先落 left/top，再在同一任务里清 transform。
       if (mode !== MODE_MAX) mode = MODE_DRAGGED;
-      applyWindow();
+      // skipMeasure：位置马上要变成新的 left/top，这一帧别再插一次强制同步布局，
+      // 用拖动开始时量到的尺寸（拖动过程不改面板尺寸，这个值是准的）。
+      applyWindow(true);
       clearDragTransform();
+      // 位置已经落定，再让玻璃质感回来（跨两帧，别和这一帧的重排抢）。
+      settleDragging();
       saveState();
     }
 
@@ -928,6 +1024,9 @@ window.__ModuleLoader__.load({
       clearDragTransform();
       // 拖动中的话先把 window 上的临时监听摘掉，否则面板换了一个、旧监听还在跟手
       endDragListeners();
+      // 上一轮松手排的「恢复玻璃」回调要撤掉：面板已经是别人的了，
+      // 它跑起来会去摘一个已不存在的标记。
+      cancelSettle();
       releasePanelDrag();
       if (gripEl !== null) {
         gripEl.removeEventListener("pointerup", onGripPointerUpRestore);
@@ -967,6 +1066,7 @@ window.__ModuleLoader__.load({
       titleEl = null;
       headerEl = null;
       drag = null;
+      lastNatural = null;
     }
 
     /**
@@ -1160,6 +1260,7 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------- 生命周期
     function dispose() {
       stopWatch();
+      cancelSettle();
       cleanupPanel();
       removeStyles();
       if (diag !== null) diag.window = null;

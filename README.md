@@ -131,10 +131,15 @@ DSH 自带的设置弹窗是一块居中的固定面板，盖在遮罩上，只�
 - 位置与状态存在 `localStorage` 的 `dsh-sidebar-rail.win.v1`
 - 拖动只写合成层 `transform`（`translate3d`）+ `requestAnimationFrame` 合帧，不触发布局重排；松手才写 `left / top`
 - **拖动期性能降级**（三段，都是为了不卡）：
-  - **摘掉液态玻璃**：面板平时带 `backdrop-filter: blur(22px)`，而拖动只改 `transform`，合成器就得按新位置**每帧重新采样背后内容再做一次模糊**——这是之前「拖起来一卡一卡」的主因。按下确认是拖动后给面板打 `data-dsh-rail-win-dragging="1"`，CSS 把 `backdrop-filter` 关掉、换成不透明底色 + `will-change:transform`；松手摘掉标记，玻璃自动回来（视觉上就是拖起来的那一下变实心，落下再变透明）
+  - **摘掉液态玻璃**：面板平时带 `backdrop-filter: blur(22px)`，而拖动只改 `transform`，合成器就得按新位置**每帧重新采样背后内容再做一次模糊**——这是之前「拖起来一卡一卡」的主因。按下确认是拖动后给面板打 `data-dsh-rail-win-dragging="1"`，CSS 把 `backdrop-filter` 关掉并加 `will-change:transform`；松手摘掉标记，玻璃自动回来。**只摘模糊、不改背景色**：底色仍是同一条 `color-mix` 半透明，这样恢复时只有「模糊」一件事在变，不会多出一次「实心↔半透明」的闪
   - **拖动中冻结同步**：`tick()` 每轮都会跑 `applyWindow()`，里面有 `getBoundingClientRect()` + `getComputedStyle()`，属于**强制同步布局**。拖动期间位置完全由 `transform` 表达，不需要也不应该再量一次，所以 `tick()` 与 `onResize()` 直接在拖动中早退，松手后补一次落位
   - **只看自己那棵树**：`MutationObserver` 原来盯 `document.body` 的任意 `childList` 变化，而 DSH 会话流式输出一秒能改几十次 DOM，等于每秒几十次 `querySelector` + 全量同步。现在只在「面板本身被增删」「面板所在子树有变化」「新增/移除的节点里含有面板」时才调度，别处的一律忽略
   - 顺带：拖动中不再每帧改写 `diag.window`（否则每 1.5s 一次的诊断上报会白做序列化），`body` 的 `grabbing` 光标也不再靠 `*` 扫整棵文档树
+- **松手不闪、不跳**（收手瞬间的那一下）：
+  - **所见即所得**：拖动期间画的是 `transform`，落位写的是 `left / top`，两套坐标必须严格对应。现在 `flushDrag()` 每帧就按松手时的同一套参数（`clampPos(x, y, 0, 0)`）把位移夹进边界并记下**这一帧真正画出去的位置**，`onDragPointerUp()` 直接照着它落位。以前是拖动不夹、松手才夹，拖到视口边缘收手就会往回弹一截——那就是「跳帧」。夹取参数两边必须完全一致，传真实宽高会得到另一组边界（`minX = 80 - w`），又会跳
+  - **位置与材质分两帧**：以前在 `pointerup` 里同一帧做三件互相打架的事——摘降级标记（模糊恢复 + `will-change` 撤销 + 图层重新光栅化）、写新的 `left/top`、清空 `transform`。三件挤一帧，浏览器只能拿「新位置 + 还没算好的背景」先画一帧，看起来就是落位那一下闪。现在第一帧只把位置落定（仍是降级态，没有模糊，合成成本最低），下一帧（双 `requestAnimationFrame`）再恢复模糊与 `will-change`，`settleDragging()`）
+  - **落位那一帧不量尺寸**：`applyWindow(skipMeasure)` 跳过 `getBoundingClientRect + getComputedStyle`，改用拖动开始时记下的自然尺寸（拖动过程不改面板尺寸，这个值是准的），落位少一次强制同步布局，不会晚一帧
+  - 上一次松手的「恢复玻璃」回调若还没跑就又按下，先 `cancelSettle()` 撤掉；否则它会在新一轮拖动中间把模糊放回来，白白重算一次
 - **圆点的动作走 `pointerdown` 而不是 `click`**：官方弹窗用模态层在 document 上挂捕获阶段的指针监听（点面板外就关），挂进面板的外来按钮一旦被打断，`click` 可能走不完；按下即生效，不必等一次完整点击
 
 与官方布局的关系：模块不依赖任何哈希类名，只按 `grid-area` 认出「标题栏」和「关闭按钮区」，改写内联样式且**只写自己的属性**（`data-dsh-rail-win*`），关窗时原样撤掉，官方弹窗组件本身不动。找不到标题栏就整体退出，保持官方原样。
@@ -236,7 +241,7 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/probe-final.cjs` | 端到端回归：齿轮已消失、展开/收起、设置页里增 / 删 / 保存写回轨道、刷新后保持 |
 | `probes/drag-probe.cjs` | 拖拽排序：ghost / 半透明占位 / FLIP / `order` 变更 / 落盘 / 刷新还原 / 自定义条目重排 / 点击抑制 |
 | `probes/float-probe.cjs` | 悬浮：进出悬浮态、自动展开/停靠自动收起、抓手出现、`translate3d` 拖动、坐标夹取与落盘、**首次落位即写盘**、**三段无缝衔接（含刷新后与 nav 长高后）**、刷新还原、双击停靠、缩窗口不跑丢、**拖动无长任务** |
-| `probes/window-probe.cjs` | 设置窗口化：控制圆点在 header 行内、左绿右黄两个、与官方 × 和左侧标题同一水平线、**官方 × 换皮成 12px 红圆点（无障碍名字与 28px 热区都还在）**、**从面板正文任意非交互位置起拖都能移动**、**按住标题照样能拖**、**按在按钮上拖不走窗口**、**按钮点击仍有效**、**越界拖会被夹在边界**、**拖动期摘掉 backdrop-filter 并加 will-change，松手恢复**、拖动移动与落盘、最大化铺满会话区且不盖竖轨、最小化与点标题条还原、刷新后位置保持、点官方 × 关闭且不残留遮罩、**用真实鼠标拖 40 步无长任务** |
+| `probes/window-probe.cjs` | 设置窗口化：控制圆点在 header 行内、左绿右黄两个、与官方 × 和左侧标题同一水平线、**官方 × 换皮成 12px 红圆点（无障碍名字与 28px 热区都还在）**、**从面板正文任意非交互位置起拖都能移动**、**按住标题照样能拖**、**按在按钮上拖不走窗口**、**按钮点击仍有效**、**越界拖会被夹在边界**、**拖动期摘掉 backdrop-filter 并加 will-change，松手恢复**、**拖动中确实用 transform 表达位移**、**松手落位与拖动中所见完全一致（不瞬移）**、**松手后无残留 transform**、拖动移动与落盘、最大化铺满会话区且不盖竖轨、最小化与点标题条还原、刷新后位置保持、点官方 × 关闭且不残留遮罩、**用真实鼠标拖 40 步无长任务** |
 | `probes/features-probe.cjs` | 功能开关：四行渲染与默认全开、关圆点后整组消失且**官方 × 退回原生外观**、关还原后黄点被禁用且点不动、关最大化后绿点被禁用且点不动、关拖动后**从面板正文起拖也不动且光标退回常态**、**关掉再打开全部恢复（含光标恢复 grab）**、刷新后四项状态原样恢复、键盘 Enter 可切换、诊断无异常 |
 
 `drag-probe.cjs`、`float-probe.cjs`、`window-probe.cjs` 与 `features-probe.cjs` 自带静态回归台（`probes/drag-harness.html` 复刻 DSH 侧边栏与设置弹窗的 DOM 骨架 + 加载真实 `client.js`；`probes/features-harness.html` 在此基础上加了 `react` 桩与 `slots.inject` 留档，好让设置页那一节真能被挂起来），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。

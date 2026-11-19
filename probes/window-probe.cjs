@@ -450,6 +450,70 @@ async function main() {
       check("往视口外拖会被夹在左边界（x=80），不会飞出屏幕", false, "找不到落点");
     }
 
+    // 2d. 收手不跳：拖动全程只画 transform，落位才写 left/top。
+    // 这两套坐标一旦不相等，松手那一帧面板就会瞬移到另一个位置 —— 就是「停靠时闪烁/跳帧」。
+    // 做法：拖到一半时记下 transform 表达的位置，松手后再读 left/top 表达的位置，两者必须一致。
+    const freePoint3 = await evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return null;
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const r = p.getBoundingClientRect();
+      for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
+        for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
+          const el = document.elementFromPoint(x, y);
+          if (!el || !p.contains(el) || el.closest(bad)) continue;
+          return { x: x, y: y };
+        }
+      }
+      return null;
+    })()`);
+    if (freePoint3 !== null) {
+      // 起点基准：拖动前 left/top 表达的左上角
+      const base = await evalJs(`(() => {
+        const p = window.__HARNESS__.panel();
+        const r = p.getBoundingClientRect();
+        return { x: Math.round(r.left), y: Math.round(r.top) };
+      })()`);
+      await mouse("mousePressed", freePoint3.x, freePoint3.y);
+      // 分三步走，途中读一次「transform 说自己在哪」
+      const DX = 90;
+      const DY = 70;
+      for (let i = 1; i <= 3; i++) {
+        await mouse("mouseMoved", freePoint3.x + Math.round((DX * i) / 3), freePoint3.y + Math.round((DY * i) / 3));
+        await sleep(40);
+      }
+      const mid = await evalJs(`(() => {
+        const p = window.__HARNESS__.panel();
+        const r = p.getBoundingClientRect();
+        const m = /translate3d\\((-?[\\d.]+)px,\\s*(-?[\\d.]+)px/.exec(p.style.transform || "");
+        return {
+          rect: { x: Math.round(r.left), y: Math.round(r.top) },
+          tx: m ? Number(m[1]) : 0,
+          ty: m ? Number(m[2]) : 0,
+          hasTransform: (p.style.transform || "") !== "",
+        };
+      })()`);
+      await mouse("mouseReleased", freePoint3.x + DX, freePoint3.y + DY);
+      await sleep(420);
+      const settledBox = await panelBox();
+      const paintedX = mid.rect.x;
+      const paintedY = mid.rect.y;
+      const settledX = settledBox.panel === null ? null : settledBox.panel.x;
+      const settledY = settledBox.panel === null ? null : settledBox.panel.y;
+      check("拖动中确实用 transform 表达位移（还没写 left/top）",
+        mid.hasTransform === true && (mid.tx !== 0 || mid.ty !== 0), { tx: mid.tx, ty: mid.ty, base: base });
+      check("松手落位与拖动中所见完全一致（不会瞬移一段）",
+        settledX !== null && Math.abs(settledX - paintedX) <= 2 && Math.abs(settledY - paintedY) <= 2,
+        { painted: { x: paintedX, y: paintedY }, settled: { x: settledX, y: settledY } });
+      check("松手后没有残留 transform（落位改由 left/top 表达）",
+        (await evalJs(`(() => { const p = window.__HARNESS__.panel(); return p ? (p.style.transform || "") : "no-panel"; })()`)) === "",
+        await evalJs(`(() => { const p = window.__HARNESS__.panel(); return p ? (p.style.transform || "") : "no-panel"; })()`));
+    } else {
+      check("拖动中确实用 transform 表达位移（还没写 left/top）", false, "找不到落点");
+      check("松手落位与拖动中所见完全一致（不会瞬移一段）", false, "找不到落点");
+      check("松手后没有残留 transform（落位改由 left/top 表达）", false, "找不到落点");
+    }
+
     // ------------------------------------------------ 3. 最大化：铺满会话区
     // 圆点只有两个且顺序是「绿(最大化) / 黄(最小化)」，所以最大化取 dots[0]
     // 注意：2b 里又拖过两次窗口，d1 的坐标已经过期，这里必须重新取快照。
