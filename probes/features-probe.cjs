@@ -188,6 +188,15 @@ async function main() {
         min: dot('.dsr-light-min'),
         max: dot('.dsr-light-max'),
         dotCount: lights ? lights.querySelectorAll('.dsr-light').length : 0,
+        // 官方 × 的换皮状态：关掉红绿灯开关时它必须退回原生外观，
+        // 否则会出现「两个圆点没了、× 还是红点」的半残状态。
+        closeDot: (() => {
+          const b = p && p.querySelector('[data-dsh-rail-win-header] > button[class*="close" i]');
+          if (!b) return null;
+          const r = b.getBoundingClientRect();
+          return { w: Math.round(r.width), attr: b.getAttribute('data-dsh-rail-win-close'),
+                   hasSvg: b.querySelector('svg') !== null };
+        })(),
         attr: p && p.getAttribute('data-dsh-rail-win'),
         minAttr: p && p.getAttribute('data-dsh-rail-win-min'),
         maxAttr: p && p.getAttribute('data-dsh-rail-win-max'),
@@ -246,6 +255,11 @@ async function main() {
     await clickFeature("lights");
     const p2 = await panelBox();
     check("关掉红绿灯后整组按钮消失", p2 && p2.hasLights === false, p2 && { hasLights: p2.hasLights });
+    // 官方 × 的那颗红点属于这一组，必须一起退回原生外观：
+    // 换皮标记摘掉，盒子回到官方原来的 28px。
+    check("关掉红绿灯后官方 × 也退回原生外观",
+      p2 && p2.closeDot !== null && p2.closeDot.attr === null && p2.closeDot.w === 28,
+      p2 && p2.closeDot && { attr: p2.closeDot.attr, w: p2.closeDot.w });
     const s2 = await stored();
     check("红绿灯状态写进本机存储", s2 && s2.lights === false, s2);
     const r2 = await rows();
@@ -260,6 +274,9 @@ async function main() {
       p3 && p3.hasLights === true && p3.dotCount === 2 && p3.min !== null && p3.max !== null,
       p3 && { hasLights: p3.hasLights, dotCount: p3.dotCount });
     check("圆点里没有红点（关闭交给官方 ×）", p3 && p3.close === null, p3 && { close: p3.close });
+    check("重新打开红绿灯后官方 × 又变回红圆点",
+      p3 && p3.closeDot !== null && p3.closeDot.attr === "1" && p3.closeDot.w === 12,
+      p3 && p3.closeDot && { attr: p3.closeDot.attr, w: p3.closeDot.w });
 
     // 键盘也能切：Enter 等价点一下
     const kb = await evalJs(`(() => {

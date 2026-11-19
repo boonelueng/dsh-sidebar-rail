@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.3",
+      version: "1.0.4",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },
@@ -166,8 +166,8 @@ window.__ModuleLoader__.load({
     const FEATURES = [
       {
         key: "lights",
-        label: "窗口红绿灯",
-        desc: "设置窗口右上角的关闭 / 最小化 / 最大化三个圆点",
+        label: "窗口控制圆点",
+        desc: "绿点最大化、黄点最小化；红点是把官方 × 换了外观，关闭行为不变",
       },
       {
         key: "drag",

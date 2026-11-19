@@ -55,6 +55,12 @@ window.__ModuleLoader__.load({
     const ATTR_GRIP = "data-dsh-rail-win-grip";
     const ATTR_LIGHTS = "data-dsh-rail-win-lights";
     const ATTR_HEADER = "data-dsh-rail-win-header";
+    /**
+     * 打在官方 header 那个 × 按钮上的标记。
+     * 有了它，样式表把官方 × 的图标换成一颗红圆点——按钮本身、它的事件、
+     * 它走的关闭路径全部不动，只换「看起来是什么」。
+     */
+    const ATTR_CLOSE = "data-dsh-rail-win-close";
     const STORAGE_WIN = "dsh-sidebar-rail.win.v1";
     const PANEL_SEL = '[data-shortcut-modal="settings"]';
     const TITLE_SEL = '[data-dsh-rail-win-title="1"]';
@@ -80,6 +86,7 @@ window.__ModuleLoader__.load({
     let overlayEl = null;
     let gripEl = null;
     let lightsEl = null;
+    let closeDotEl = null;
     let titleEl = null;
     let headerEl = null;
     let toggleEl = null;
@@ -170,6 +177,32 @@ window.__ModuleLoader__.load({
       "[data-dsh-rail-win-lights] .dsr-light:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#3b82f6);outline-offset:2px}",
       "[data-dsh-rail-win-lights] .dsr-light-min{background:#febc2e}",
       "[data-dsh-rail-win-lights] .dsr-light-max{background:#28c840}",
+
+      /* 官方 × 按钮换皮成红圆点：**只换 logo，功能一点不动**。
+         按钮还是官方那个 <button>，onClose 还是 React 自己挂的处理器，
+         点击路径、键盘可达、aria 名字全部原样保留。
+         这里只做三件事：
+           1) 把 28px 的方形按钮压成 12px 的圆、填成和另两颗同一档的红；
+           2) 藏掉里面的 × 图标（和可能的隐藏文字），露出纯色圆；
+           3) 用 ::after 撑回 28px 的点击热区——视觉变小不等于点不着。
+         纵向同样要 margin-top:8px：原生 28px 时中心落在 20+14=34px，
+         压成 12px 后中心是 20+6=26px，差 8px，补回来才和另两颗圆点、
+         以及左侧「设置」二字落在同一条水平线上。 */
+      "[data-dsh-rail-win-close]{",
+      "width:12px!important;height:12px!important;min-width:0!important;",
+      "border-radius:50%!important;background:#ff5f57!important;",
+      "box-shadow:inset 0 0 0 .5px rgba(0,0,0,.14)!important;",
+      "margin-top:8px!important;margin-left:0!important;margin-right:0!important;",
+      "position:relative;align-self:flex-start;padding:0!important;",
+      "flex:none!important;",
+      "}",
+      "[data-dsh-rail-win-close] > *{display:none!important}",
+      /* 12px 的圆点对鼠标来说太小了：用一个不可见的伪元素把热区撑到 28px。
+         伪元素是按钮自己的子级，点击仍然命中按钮本身。 */
+      "[data-dsh-rail-win-close]::after{",
+      "content:\"\";position:absolute;inset:-8px;border-radius:50%;",
+      "}",
+      "[data-dsh-rail-win-close]:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#3b82f6);outline-offset:2px}",
 
       /* 最小化：收成一条停在本位的标题栏，点击任意处还原。 */
       "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"]{",
@@ -347,11 +380,14 @@ window.__ModuleLoader__.load({
 
     function ensureLights() {
       // 「窗口红绿灯」关掉时这组按钮根本不存在；已经建好的由 onFeaturesChanged 摘掉。
+      // 官方 × 那颗红点也属于这一组：关掉就把标记摘掉，让它退回原生外观，
+      // 否则会出现「两个圆点没了、× 却还红着」的半残状态。
       if (!featureOn("lights")) {
         if (lightsEl !== null) {
           lightsEl.remove();
           lightsEl = null;
         }
+        releaseCloseDot();
         return;
       }
       // 已连在面板上就什么都不用做；脱离（面板被宿主重挂载）就整组重建，
@@ -411,10 +447,46 @@ window.__ModuleLoader__.load({
         } else {
           headerEl.appendChild(lightsEl);
         }
+        // 找到官方 × 之后顺手给它换皮（只加标记，不碰事件与结构）。
+        // 放在这里而不是 adopt() 里：这是唯一既拿到 headerEl 又拿到 closeBtn 的地方。
+        markCloseDot(closeBtn);
       } else {
         panelEl.appendChild(lightsEl);
       }
       syncDots();
+    }
+
+    /**
+     * 给官方 × 按钮打上「这颗现在是红圆点」的标记。
+     * 只是加一个属性——按钮还是那个按钮，React 的 onClose、键盘 Enter/Space、
+     * aria-label 一字未动，样式表负责把它压成 12px 的红圆。
+     */
+    function markCloseDot(btn) {
+      if (btn === null || btn === undefined) return;
+      if (!featureOn("lights")) return;
+      closeDotEl = btn;
+      if (btn.getAttribute(ATTR_CLOSE) !== "1") btn.setAttribute(ATTR_CLOSE, "1");
+      // 视觉换成纯色圆之后，原来的「关闭」文字/图标都藏了，
+      // 无障碍名字必须留着，否则读屏只剩一个没有名字的圆点。
+      // 只在自己补的时候记一笔，卸载时才知道该不该摘掉（官方本来有名字就不动它）。
+      if (!btn.getAttribute("aria-label") && !btn.getAttribute("title")) {
+        if (btn.getAttribute("data-dsr-close-label") !== "1") {
+          btn.setAttribute("aria-label", "关闭设置");
+          btn.setAttribute("data-dsr-close-label", "1");
+        }
+      }
+    }
+
+    /** 把官方 × 恢复原生外观（关掉 lights 开关、或插件卸载时都要走一遍）。 */
+    function releaseCloseDot() {
+      if (closeDotEl === null) return;
+      const btn = closeDotEl;
+      closeDotEl = null;
+      if (btn.getAttribute(ATTR_CLOSE) === "1") btn.removeAttribute(ATTR_CLOSE);
+      if (btn.getAttribute("data-dsr-close-label") === "1") {
+        btn.removeAttribute("data-dsr-close-label");
+        btn.removeAttribute("aria-label");
+      }
     }
 
     function ensureGrip() {
@@ -728,6 +800,9 @@ window.__ModuleLoader__.load({
         lightsEl.remove();
         lightsEl = null;
       }
+      // 官方 × 的换皮也要撤销：面板可能被官方整个销毁重建，
+      // 那个按钮已随旧面板消失，这里是最后能清干净的地方。
+      releaseCloseDot();
       if (panelEl !== null) {
         panelEl.removeAttribute(ATTR_WIN);
         panelEl.removeAttribute("data-dsh-rail-win-min");
@@ -950,12 +1025,14 @@ window.__ModuleLoader__.load({
      */
     function onFeaturesChanged(next) {
       if (panelEl === null) return;
-      // 红绿灯：关掉就整组摘掉，开回来就补建（ensureLights 自己会判断）
+      // 红绿灯：关掉就整组摘掉（连官方 × 那颗红点一起退回原样），开回来就补建
+      // （ensureLights 自己会判断，标记也在它里面打）
       if (!featureOn("lights")) {
         if (lightsEl !== null) {
           lightsEl.remove();
           lightsEl = null;
         }
+        releaseCloseDot();
       } else {
         ensureLights();
       }

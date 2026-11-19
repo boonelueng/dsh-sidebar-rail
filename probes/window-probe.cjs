@@ -184,6 +184,25 @@ async function main() {
         // 且住在 header 里面，用后代选择器会先命中它，断言就成了「红绿灯在自己左边」。
         // 属性值在 CSS 里大小写敏感，官方是 VOzbGW_close、回归台是 stClose，所以带 i 标志。
         closeBtn: box(p && p.querySelector('[data-dsh-rail-win-header] > button[class*="close" i]')),
+        // 官方 × 换皮成红圆点之后的外观：只看样子，按钮还是官方那一个。
+        // skinAttr 是插件打上去的标记，撤销时要能摘干净（关掉红绿灯开关的回归里查它）。
+        closeDot: (() => {
+          const b = document.querySelector('[data-dsh-rail-win-header] > button[class*="close" i]');
+          if (!b) return null;
+          const r = b.getBoundingClientRect();
+          const cs = getComputedStyle(b);
+          return {
+            w: Math.round(r.width), h: Math.round(r.height),
+            cx: Math.round(r.x + r.width / 2), cy: Math.round(r.y + r.height / 2),
+            bg: cs.backgroundColor, radius: cs.borderTopLeftRadius,
+            attr: b.getAttribute('data-dsh-rail-win-close'),
+            label: b.getAttribute('aria-label'),
+            // 视觉压到 12px 之后热区靠 ::after 撑回 28px。
+            // 伪元素命中会归到按钮本身，用 elementFromPoint 在旧框边缘探一下就知道还在不在。
+            hitLeft: (() => { const el = document.elementFromPoint(r.x - 6, r.y + r.height / 2); return el === b; })(),
+            hitRight: (() => { const el = document.elementFromPoint(r.x + r.width + 6, r.y + r.height / 2); return el === b; })(),
+          };
+        })(),
         position: p && getComputedStyle(p).position,
         vw: window.innerWidth, vh: window.innerHeight,
         railRight: Math.round(window.__HARNESS__.root().getBoundingClientRect().right),
@@ -231,6 +250,27 @@ async function main() {
       { lightsCenterY: o.lights ? o.lights.y + o.lights.h / 2 : null,
         titleCenterY: o.titleCenterY });
     check("接管后打上了 data-dsh-rail-win", o.attr === "1", o.attr);
+
+    // ------------------------------------------- 1b. 官方 × 换皮成红圆点
+    // 这是「只换 logo」的验收：样子要变成和另两颗同款的 12px 红圆，
+    // 但按钮还是官方那一个（同一个 DOM 节点、同一个 class、同一个 onClose），
+    // 且无障碍名字与点击热区都不能因为视觉变小而丢。
+    check("官方 × 被打上换皮标记", o.closeDot !== null && o.closeDot.attr === "1", o.closeDot && o.closeDot.attr);
+    check("官方 × 看起来是 12px 的红圆点",
+      o.closeDot !== null && o.closeDot.w === 12 && o.closeDot.h === 12 &&
+      o.closeDot.radius === "50%" && o.closeDot.bg === "rgb(255, 95, 87)",
+      o.closeDot && { size: o.closeDot.w + "x" + o.closeDot.h, radius: o.closeDot.radius, bg: o.closeDot.bg });
+    check("官方 × 与另两颗圆点落在同一条水平线上",
+      o.closeDot !== null && o.lights !== null &&
+      Math.abs(o.closeDot.cy - (o.lights.y + o.lights.h / 2)) <= 2,
+      { closeDotCenterY: o.closeDot ? o.closeDot.cy : null,
+        lightsCenterY: o.lights ? o.lights.y + o.lights.h / 2 : null });
+    check("官方 × 的无障碍名字还在（视觉变小不等于读屏失声）",
+      o.closeDot !== null && typeof o.closeDot.label === "string" && o.closeDot.label.length > 0,
+      o.closeDot && o.closeDot.label);
+    check("官方 × 压成 12px 后点击热区仍撑到 28px（左右各 8px 仍能点中）",
+      o.closeDot !== null && o.closeDot.hitLeft === true && o.closeDot.hitRight === true,
+      o.closeDot && { hitLeft: o.closeDot.hitLeft, hitRight: o.closeDot.hitRight });
     check("拖动抓手存在", o.grip !== null, o.grip);
     await shot("shot-window-open.png");
 
