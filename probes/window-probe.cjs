@@ -213,6 +213,20 @@ async function main() {
 
     await boot("first");
 
+    // 官方 sidebar 的取消固定按钮必须消失，但 More 菜单仍要可见：不能靠移除
+    // sidebar.panellist.actions 来实现，否则会连其他侧栏动作一起删掉。
+    const sidebarActions = await evalJs(`(() => {
+      const unpin = document.querySelector('[data-harness-unpin="1"]');
+      const more = document.querySelector('button[aria-label="更多"]');
+      return {
+        unpin: unpin ? { display: getComputedStyle(unpin).display, text: unpin.textContent } : null,
+        more: more ? { display: getComputedStyle(more).display, text: more.textContent } : null,
+      };
+    })()`);
+    result.steps.sidebarActions = sidebarActions;
+    check("左侧栏取消固定按钮已隐藏", sidebarActions.unpin !== null && sidebarActions.unpin.display === "none", sidebarActions);
+    check("隐藏取消固定后更多菜单仍保留", sidebarActions.more !== null && sidebarActions.more.display !== "none", sidebarActions);
+
     // ------------------------------------------------------- 1. 打开设置弹窗
     await openSettings();
     result.steps.opened = await panelBox();

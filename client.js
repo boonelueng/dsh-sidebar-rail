@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.9",
+      version: "1.0.10",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },
@@ -666,6 +666,12 @@ window.__ModuleLoader__.load({
     // -------------------------------------------------------------------- css
     const CSS = [
       '[data-dsh-rail-root]{position:relative!important}',
+
+      /* DSH 左栏的「从左侧栏取消固定」只会隐藏一行，不应移除 More 菜单。
+         第一项锁当前编译 CSS-module 类；后缀项承接 DSH 升级后的 hash 变化。
+         选择器必须比下面 nav button 的 display:flex 规则更具体，才能真正隐藏该按钮。 */
+      '[data-dsh-rail-root] > [data-dsh-rail-part="nav"] button.hHd-Xa_panelUnpin,',
+      '[data-dsh-rail-root] > [data-dsh-rail-part="nav"] button[class*="_panelUnpin"]{display:none!important}',
 
       /* 顶部与底部保持整行宽度（不在它们旁边留空槽） */
       '[data-dsh-rail-root] > [data-dsh-rail-part="logo"],',
