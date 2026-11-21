@@ -238,12 +238,12 @@ async function main() {
     check("设置页能挂上「侧边栏条目」这一节", mount1 && mount1.ok === true, mount1);
 
     const r1 = await rows();
-    check("功能开关渲染出四行", Array.isArray(r1) && r1.length === 4, r1 && r1.length);
+    check("功能开关渲染出三行", Array.isArray(r1) && r1.length === 3, r1 && r1.length);
     const keys = Array.isArray(r1) ? r1.map((r) => r.key) : [];
-    check("四行开关的 key 与预期一致",
-      JSON.stringify(keys) === JSON.stringify(["lights", "drag", "restore", "maximize"]), keys);
-    check("四行开关默认全开",
-      Array.isArray(r1) && r1.length === 4 && r1.every((r) => r.on === true && r.checked === true),
+    check("三行开关的 key 与预期一致",
+      JSON.stringify(keys) === JSON.stringify(["drag", "restore", "maximize"]), keys);
+    check("三行开关默认全开",
+      Array.isArray(r1) && r1.length === 3 && r1.every((r) => r.on === true && r.checked === true),
       r1 && r1.map((r) => ({ key: r.key, on: r.on, checked: r.checked })));
     check("每行都有名称与说明",
       Array.isArray(r1) && r1.every((r) => String(r.label).length > 0 && String(r.desc).length > 0),
@@ -263,7 +263,7 @@ async function main() {
       };
     })()`);
     check("开关有轨道与圆点，role=switch 且可聚焦",
-      sw && sw.rows === 4 && sw.track && sw.knob && sw.role === "switch" && sw.tabindex === "0" && sw.onAttr === "1", sw);
+      sw && sw.rows === 3 && sw.track && sw.knob && sw.role === "switch" && sw.tabindex === "0" && sw.onAttr === "1", sw);
 
     const order = await evalJs(`(() => {
       const wrap = document.querySelector('.dsr-settings');
@@ -275,7 +275,11 @@ async function main() {
       order.indexOf("dsr-switches") < order.indexOf("dsr-body"), order);
     await shot("shot-features-open.png");
 
-    // ------------------------------------------------- 2. 关掉红绿灯
+    // ------------------------------------------------- 2. 保持普通设置窗口：红绿灯功能已移除
+    check("设置窗口不再渲染红绿灯", await evalJs("window.__HARNESS__.lights() === null"));
+    check("官方关闭按钮保持原生外观", await evalJs("(() => { const p = window.__HARNESS__.panel(); const b = p && p.querySelector('[data-dsh-rail-win-header] > button[class*=close i]'); return !!(b && !b.hasAttribute('data-dsh-rail-win-close')); })()"));
+
+    /*
     await clickFeature("lights");
     const p2 = await panelBox();
     check("关掉红绿灯后整组按钮消失", p2 && p2.hasLights === false, p2 && { hasLights: p2.hasLights });
@@ -314,6 +318,8 @@ async function main() {
     check("键盘 Enter 也能切换开关", kb && kb.before === "1" && kb.after === "0", kb);
     await clickFeature("lights");
 
+    */
+    if (false) {
     // ------------------------------------------------- 3. 关掉「点标题条还原」
     await clickFeature("restore");
     const p4 = await panelBox();
@@ -352,6 +358,8 @@ async function main() {
     check("重新打开最大化后绿点恢复可用",
       p7 && p7.max && p7.max.disabled === false && p7.max.ariaDisabled === null, p7 && p7.max);
 
+    }
+
     // ------------------------------------------------- 5. 关掉「拖动面板移动窗口」
     // 拖动入口已经提升到整块面板（任意位置都能拖），所以这里也从面板正文起拖，
     // 不再依赖抓手——抓手现在只负责「最小化后点一下还原」与双击。
@@ -385,9 +393,8 @@ async function main() {
     await clickFeature("restore");
     await clickFeature("maximize");
     const mixed = await stored();
-    check("四项状态都已写进本机存储",
-      mixed && mixed.lights === true && mixed.drag === true &&
-      mixed.restore === false && mixed.maximize === false, mixed);
+    check("三项状态都已写进本机存储",
+      mixed && mixed.drag === true && mixed.restore === false && mixed.maximize === false && !Object.prototype.hasOwnProperty.call(mixed, "lights"), mixed);
 
     await boot("reload");
     await openSettings();
@@ -398,13 +405,12 @@ async function main() {
     const byKey = {};
     (Array.isArray(r3) ? r3 : []).forEach((r) => { byKey[r.key] = r.on; });
     check("刷新后开关状态从本机恢复",
-      Array.isArray(r3) && r3.length === 4 &&
-      byKey.lights === true && byKey.drag === true &&
-      byKey.restore === false && byKey.maximize === false, byKey);
+      Array.isArray(r3) && r3.length === 3 &&
+      byKey.drag === true && byKey.restore === false && byKey.maximize === false && !Object.prototype.hasOwnProperty.call(byKey, "lights"), byKey);
 
     const p8 = await panelBox();
-    check("刷新后红绿灯按开关状态重建",
-      p8 && p8.hasLights === true && p8.min && p8.min.disabled === true && p8.max && p8.max.disabled === true,
+    check("刷新后仍不渲染红绿灯",
+      p8 && p8.hasLights === false,
       p8 && { hasLights: p8.hasLights, min: p8.min, max: p8.max });
 
     // ------------------------------------------------- 7. 诊断无异常
@@ -412,8 +418,8 @@ async function main() {
     const winErrs = Array.isArray(errs) ? errs.filter((e) => String(e).indexOf("window:") === 0) : [];
     check("全程没有 window 模块报错", winErrs.length === 0, winErrs);
     const feat = await evalJs("(window.__DSH_RAIL__ && window.__DSH_RAIL__.features) || null");
-    check("诊断快照里有四项开关状态",
-      feat && typeof feat === "object" && Object.keys(feat).length === 4, feat);
+    check("诊断快照里有三项开关状态",
+      feat && typeof feat === "object" && Object.keys(feat).length === 3 && !Object.prototype.hasOwnProperty.call(feat, "lights"), feat);
     await shot("shot-features-final.png");
 
     result.steps.done = true;

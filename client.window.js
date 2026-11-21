@@ -3,10 +3,8 @@
  *
  * 给 DSH 官方的设置弹窗补上桌面窗口的行为：
  *   - 按住面板任意位置都能拖动整个窗口（按钮、输入框等交互元素除外）；
- *   - 右上角两个圆点：绿=最大化、黄=最小化；
- *   - 最大化 = 铺满侧边栏右侧的会话区，再点一次还原；
- *   - 最小化 = 收成一条停在弹出位置的标题栏，点它还原；
- *   - 关闭 = 官方 header 那个 × 按钮（只把外观换成红圆点，行为完全不动）。
+ *   - 标题栏双击可最大化，再次双击还原；
+ *   - 关闭 = 官方 header 的原生 × 按钮，行为与外观均由宿主提供。
  *
  * 设计上只用「官方设置弹窗本来就有的 DOM 契约」定位：
  *   [data-shortcut-modal="settings"]  → 面板本身（role=dialog）
@@ -37,7 +35,7 @@ window.__ModuleLoader__.load({
     /**
      * 读一个功能开关。
      *
-     * 四个功能（红绿灯 / 标题栏拖动 / 点标题条还原 / 最大化铺满）各自独立开关，
+     * 四个功能（标题栏拖动 / 点标题条还原 / 最大化铺满）各自独立开关，
      * 都在 DSH 设置页「侧边栏条目」里。拿不到内核状态时一律当「开」：
      * 内核没暴露开关（老版本内核）或读取抛错时，宁可保持旧行为，也不要突然少功能。
      */
@@ -53,25 +51,8 @@ window.__ModuleLoader__.load({
     // ------------------------------------------------------------------- 常量
     const ATTR_WIN = "data-dsh-rail-win";
     const ATTR_GRIP = "data-dsh-rail-win-grip";
-    const ATTR_LIGHTS = "data-dsh-rail-win-lights";
     const ATTR_HEADER = "data-dsh-rail-win-header";
-    /**
-     * 打在官方 header 那个 × 按钮上的标记。
-     * 有了它，样式表把官方 × 的图标换成一颗红圆点——按钮本身、它的事件、
-     * 它走的关闭路径全部不动，只换「看起来是什么」。
-     */
-    const ATTR_CLOSE = "data-dsh-rail-win-close";
-    /**
-     * 拖动开关的 DOM 投影。开着时面板任意位置都能按住拖走，
-     * 所以整块面板的 cursor 要变成 grab；关掉时摘掉这个属性，
-     * 光标立刻退回常态，不会出现「看起来能拖其实拖不动」。
-     */
     const ATTR_DRAG = "data-dsh-rail-win-drag";
-    /** 拖动进行中的标记。挂在面板上时样式表只做一件事：加 will-change:transform，
-        让合成器提前把面板当成要动的图层。
-        **刻意不动任何视觉属性**（模糊、背景色、描边、投影全程不变）：
-        曾经这里会摘掉 backdrop-filter 来省掉每帧模糊重采样，结果是拖起来
-        「背景忽然变清晰」、松手又变回磨砂 —— 用户看到的就是透明度在变、还闪一下。 */
     const ATTR_DRAGGING = "data-dsh-rail-win-dragging";
     const STORAGE_WIN = "dsh-sidebar-rail.win.v1";
     const PANEL_SEL = '[data-shortcut-modal="settings"]';
@@ -102,8 +83,6 @@ window.__ModuleLoader__.load({
       "[role='tab']",
       "[role='checkbox']",
       "[role='switch']",
-      "[data-dsh-rail-win-lights]",
-      "[data-dsh-rail-win-close]",
     ].join(",");
 
     // 三条状态：
@@ -122,8 +101,6 @@ window.__ModuleLoader__.load({
     let panelEl = null;
     let overlayEl = null;
     let gripEl = null;
-    let lightsEl = null;
-    let closeDotEl = null;
     let titleEl = null;
     let headerEl = null;
     let toggleEl = null;
@@ -203,79 +180,27 @@ window.__ModuleLoader__.load({
       "body.dsr-win-dragging [data-dsh-rail-win]{cursor:grabbing!important}",
 
       /* 官方 header 行抬到抓手之上：抓手是覆盖整条标题栏的绝对定位层（z-index:0），
-         红绿灯现在住在 header 里，若不抬高就会被抓手盖住、点不到。 */
+         官方 header 行抬到抓手之上，避免被覆盖。 */
       "[data-dsh-rail-win] > [data-dsh-rail-win-header]{",
       "position:relative;z-index:2;",
       "}",
 
-      /* 窗口控制圆点：住在官方 header 行里、官方 × 的左边，由 header 的 flex 排版，
-         所以这里只留静态流内样式——不绝对定位到面板右上角，
-         否则会和官方那行「打开配置文件」+ × 叠在一起。
-         只有两个点：最小化（黄）在最右、最大化（绿）在左；关闭交给官方自己的 × 按钮，
-         所以不再造第三个红点。
-         纵向对齐：header 是 display:flex + align-items:flex-start，官方 × 有 28px 高，
-         它的垂直中心落在 20px(padding-top) + 14px 处，正好等于标题行
-         （22px padding-top + 24px 行高）的垂直中线。我们只有 12px 的圆点，
-         贴 flex-start 会比这条中线高出 8px，所以用 margin-top 补回来，
-         才能和左侧「设置」二字处在同一条水平线上。 */
-      "[data-dsh-rail-win-lights]{",
-      "position:static;margin-left:auto;margin-top:8px;align-self:flex-start;",
-      "display:flex!important;align-items:center!important;gap:8px!important;",
-      "z-index:auto;",
-      "}",
-      "[data-dsh-rail-win-lights] .dsr-light{",
-      "width:12px;height:12px;border-radius:50%;border:none;padding:0;margin:0;",
-      "cursor:pointer;flex:none;position:relative;",
-      "box-shadow:inset 0 0 0 .5px rgba(0,0,0,.14);",
-      "transition:filter .12s ease;",
-      "}",
-      "@media (hover:hover){[data-dsh-rail-win-lights] .dsr-light:hover{filter:brightness(1.12)}}",
-      "[data-dsh-rail-win-lights] .dsr-light:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#3b82f6);outline-offset:2px}",
-      "[data-dsh-rail-win-lights] .dsr-light-min{background:#febc2e}",
-      "[data-dsh-rail-win-lights] .dsr-light-max{background:#28c840}",
-
-      /* 官方 × 按钮换皮成红圆点：**只换 logo，功能一点不动**。
-         按钮还是官方那个 <button>，onClose 还是 React 自己挂的处理器，
-         点击路径、键盘可达、aria 名字全部原样保留。
-         这里只做三件事：
-           1) 把 28px 的方形按钮压成 12px 的圆、填成和另两颗同一档的红；
-           2) 藏掉里面的 × 图标（和可能的隐藏文字），露出纯色圆；
-           3) 用 ::after 撑回 28px 的点击热区——视觉变小不等于点不着。
-         纵向同样要 margin-top:8px：原生 28px 时中心落在 20+14=34px，
-         压成 12px 后中心是 20+6=26px，差 8px，补回来才和另两颗圆点、
-         以及左侧「设置」二字落在同一条水平线上。 */
-      "[data-dsh-rail-win-close]{",
-      "width:12px!important;height:12px!important;min-width:0!important;",
-      "border-radius:50%!important;background:#ff5f57!important;",
-      "box-shadow:inset 0 0 0 .5px rgba(0,0,0,.14)!important;",
-      "margin-top:8px!important;margin-left:0!important;margin-right:0!important;",
-      "position:relative;align-self:flex-start;padding:0!important;",
-      "flex:none!important;",
-      "}",
-      "[data-dsh-rail-win-close] > *{display:none!important}",
-      /* 12px 的圆点对鼠标来说太小了：用一个不可见的伪元素把热区撑到 28px。
-         伪元素是按钮自己的子级，点击仍然命中按钮本身。 */
-      "[data-dsh-rail-win-close]::after{",
-      "content:\"\";position:absolute;inset:-8px;border-radius:50%;",
-      "}",
-      "[data-dsh-rail-win-close]:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#3b82f6);outline-offset:2px}",
-
-      /* 最小化：收成一条停在本位的标题栏，点击任意处还原。 */
+       /* 最小化：收成一条停在本位的标题栏，点击任意处还原。 */
       "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"]{",
       "width:var(--dsr-win-min-w,240px)!important;max-width:none!important;",
       "height:54px!important;min-height:0!important;",
       "grid-template:\"t h\"!important;grid-template-columns:minmax(0,1fr) auto!important;",
       "overflow:hidden!important;",
       "}",
-      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > :not([data-dsh-rail-win-title]):not([data-dsh-rail-win-grip]):not([data-dsh-rail-win-lights]):not([data-dsh-rail-win-header]){",
+      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > :not([data-dsh-rail-win-title]):not([data-dsh-rail-win-grip]):not([data-dsh-rail-win-header]){",
       "display:none!important;",
       "}",
-      /* 最小化时红绿灯住在 header 里，header 必须留着；但 header 自己那几个官方按钮
-         （「打开配置文件」+ ×）在收成一条的状态下没有意义，只留红绿灯。 */
+      /* 最小化时保留 header，避免标题栏结构被破坏；header 内的官方按钮
+         （「打开配置文件」+ ×）在收成一条的状态下隐藏。 */
       "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > [data-dsh-rail-win-header]{",
       "display:flex!important;align-items:center!important;height:100%!important;padding:0 10px 0 0!important;",
       "}",
-      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > [data-dsh-rail-win-header] > :not([data-dsh-rail-win-lights]){",
+      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > [data-dsh-rail-win-header] > button{",
       "display:none!important;",
       "}",
       "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] [data-dsh-rail-win-title]{cursor:pointer}",
@@ -286,38 +211,9 @@ window.__ModuleLoader__.load({
       "border-radius:var(--dsw-radius-panel,12px)!important;",
       "}",
 
-      /* ---- 液态玻璃：把设置面板改成毛玻璃质感 ----
-         面板背景从官方的不透明 layer-2 改成半透明（约 66% 不透明），
-         再叠 backdrop-filter 的 blur + saturate：blur 把背后主界面揉成雾面、
-         saturate 提升透出颜色的饱和度，这是液态玻璃区别于普通毛玻璃的关键。
-         顶部一条白色高光 + 一圈 1px 内描边模拟玻璃棱角的反光；
-         保留官方 elevation 投影，让面板仍「浮」在遮罩之上。
-         半透明比例取偏保守的 66%，保证文字对比度不因透色而跌穿 4.5:1。 */
-      "[data-dsh-rail-win]{",
-      "backdrop-filter:blur(22px) saturate(170%)!important;",
-      "-webkit-backdrop-filter:blur(22px) saturate(170%)!important;",
-      "background:color-mix(in srgb, var(--dsw-alias-bg-layer-2,#1b1b20) 66%, transparent)!important;",
-      /* 投影变量必须自带兜底值 —— 不能靠「再写一条不含 var 的同类声明」来兜。
-         CSS 规范里 var() 解析不出来属于 invalid at computed-value time：
-         此时整个属性会退成 unset/initial（box-shadow → none），
-         **不会**回退到同一规则块里前面那条声明。所以宿主版本若没有
-         --dsw-elevation-prominent，高光描边会连同投影一起消失。
-         给 var() 第二个参数一个与官方 elevation 同量级的兜底投影即可。 */
-      "box-shadow:inset 0 1px 0 rgba(255,255,255,.16),inset 0 0 0 1px rgba(255,255,255,.10),var(--dsw-elevation-prominent,0 12px 40px rgba(0,0,0,.28))!important;",
-      "}",
-      /* 尊重系统「减少透明」偏好：回退为不透明背景，避免文字糊在透出的内容上 */
-      "@media (prefers-reduced-transparency: reduce){",
-      "[data-dsh-rail-win]{",
-      "backdrop-filter:none!important;-webkit-backdrop-filter:none!important;",
-      "background:var(--dsw-alias-bg-layer-2,#1b1b20)!important;",
-      "box-shadow:var(--dsw-elevation-prominent,0 12px 40px rgba(0,0,0,.28))!important;",
-      "}",
-      "}",
-
-      /* ---- 拖动期：只做「图层提示」，不改任何像素 ----
+       /* ---- 拖动期：只做「图层提示」，不改任何像素 ----
          拖动只写 transform，本该由合成器直接搬运。这里在拖动过程中给面板加
          will-change:transform，让浏览器提前把它当成要动的图层。
-         **刻意不碰 backdrop-filter、也不碰 background**：
          以前为了压掉模糊的每帧重采样，曾在拖动中把模糊摘掉 —— 结果正是
          「拖起来背景忽然变清晰（看起来像透明度变了）、松手又变回去（闪一下）」。
          材质必须全程恒定：模糊半径、背景色、描边、投影一律不动，
@@ -381,186 +277,6 @@ window.__ModuleLoader__.load({
         x: Math.round(Math.min(maxX, Math.max(minX, x))),
         y: Math.round(Math.min(maxY, Math.max(minY, y))),
       };
-    }
-
-    /*
-     * 三个动作（关闭 / 最小化 / 最大化）直接用 pointerdown 触发。
-     *
-     * 为什么不用 click：官方弹窗会用 useModalLayer 在 document 上挂捕获阶段的指针监听
-     * （点面板外就关闭），我们这批按钮是挂进官方面板的外来节点，pointerdown 阶段
-     * 一旦被它判定成「从外面开始按」，click 可能根本走不完。
-     * 自己认 pointerdown，再用一次性的 pointerup/pointercancel 兜底，就不用依赖 click 的存活。
-     */
-    function bindLightAction(node, run) {
-      const onDown = function (event) {
-        if (event.button !== undefined && event.button !== 0) return;
-        event.preventDefault();
-        event.stopPropagation();
-        // 按下即生效：这些动作都是幂等的界面操作，重复点一次也只是再多切一次
-        run();
-        node.removeEventListener("pointerup", onUp);
-        node.removeEventListener("pointercancel", onUp);
-      };
-      const onUp = function () { /* 兜底占位：动作已在 pointerdown 完成 */ };
-      node.addEventListener("pointerdown", onDown);
-      node.addEventListener("pointerup", onUp);
-      node.addEventListener("pointercancel", onUp);
-      // 键盘可达性：Enter/Space 也要能触发
-      node.addEventListener("keydown", function (event) {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        event.stopPropagation();
-        run();
-      });
-    }
-
-    // ------------------------------------------------------------------ 渲染
-
-    /**
-     * 圆点的可用性跟着对应的功能开关走。
-     *
-     * 黄点没有还原路径时是个单向门：窗口收成一条之后就再也点不开了
-     * （设置页本身就在这个窗口里，用户没法进来把开关改回去）。
-     * 所以还原关掉时干脆不让最小化，而不是留一个进去出不来的坑。
-     * 绿点同理：最大化关掉时把它标成禁用，比留一个点了没反应的按钮诚实。
-     */
-    function syncDots() {
-      if (lightsEl === null) return;
-      const minDot = lightsEl.querySelector(".dsr-light-min");
-      if (minDot !== null) {
-        if (featureOn("restore")) {
-          minDot.removeAttribute("aria-disabled");
-          minDot.removeAttribute("disabled");
-          minDot.setAttribute("title", "最小化");
-        } else {
-          minDot.setAttribute("aria-disabled", "true");
-          minDot.setAttribute("disabled", "disabled");
-          minDot.setAttribute("title", "最小化（需先开启「点标题条还原」）");
-        }
-      }
-      const maxDot = lightsEl.querySelector(".dsr-light-max");
-      if (maxDot !== null) {
-        if (featureOn("maximize")) {
-          maxDot.removeAttribute("aria-disabled");
-          maxDot.removeAttribute("disabled");
-          maxDot.setAttribute("title", "最大化 / 还原");
-        } else {
-          maxDot.setAttribute("aria-disabled", "true");
-          maxDot.setAttribute("disabled", "disabled");
-          maxDot.setAttribute("title", "最大化（已在设置里关闭）");
-        }
-      }
-    }
-
-    function ensureLights() {
-      // 「窗口红绿灯」关掉时这组按钮根本不存在；已经建好的由 onFeaturesChanged 摘掉。
-      // 官方 × 那颗红点也属于这一组：关掉就把标记摘掉，让它退回原生外观，
-      // 否则会出现「两个圆点没了、× 却还红着」的半残状态。
-      if (!featureOn("lights")) {
-        if (lightsEl !== null) {
-          lightsEl.remove();
-          lightsEl = null;
-        }
-        releaseCloseDot();
-        return;
-      }
-      // 已连在面板上就什么都不用做；脱离（面板被宿主重挂载）就整组重建，
-      // 重建后下面会重新挂一遍动作处理。
-      if (lightsEl !== null && lightsEl.isConnected) return;
-      if (lightsEl === null) lightsEl = el("div", {
-        "data-dsh-rail-win-lights": "1",
-        role: "group",
-        "aria-label": "窗口控制",
-      }, [
-        // 左→右 = 绿（最大化）/ 黄（最小化）/ 红（关闭）。
-        // 关闭不再造自己的红点：直接复排官方 header 里那个 × 图标按钮，
-        // 位置天然就在这两个圆点的右边，视觉上正好凑成「绿 黄 红」。
-        el("button", {
-          type: "button",
-          className: "dsr-light dsr-light-max",
-          "aria-label": "最大化设置",
-          title: "最大化 / 还原",
-          "data-dsr-light": "max",
-        }, null),
-        el("button", {
-          type: "button",
-          className: "dsr-light dsr-light-min",
-          "aria-label": "最小化设置",
-          title: "最小化",
-          "data-dsr-light": "min",
-        }, null),
-      ]);
-      // 圆点统一走 bindLightAction：指针按下即生效，不依赖 click 是否走完
-      const dots = lightsEl.querySelectorAll(".dsr-light");
-      if (dots.length === 2) {
-        bindLightAction(dots[0], toggleMax);
-        bindLightAction(dots[1], function () { setMinimized(!minimized); });
-      }
-      // 挂进官方 header 行，排在官方 × 的左边——由 header 自己的 flex 排版，
-      // 不再绝对定位，所以不会和「打开配置文件」+ × 叠在一起。
-      //
-      // 注意别挂进 header 里那个 actions 容器：它自己带 margin-left:auto，
-      // 会把整组顶到最右，而官方 × 在 actions 外面，挂进去反而排到 × 的右边。
-      // 官方 × 的 class 带构建哈希（VOzbGW_close），回归台是 stClose，
-      // 所以按子串 + 忽略大小写认；认不出就退到 header 里最后一个按钮
-      // （× 总是最后一个）。必须排掉圆点自己，别把自己当成官方 ×。
-      if (headerEl !== null) {
-        let closeBtn = null;
-        const buttons = headerEl.querySelectorAll("button");
-        for (let i = buttons.length - 1; i >= 0; i -= 1) {
-          const btn = buttons[i];
-          if (btn.closest("[data-dsh-rail-win-lights]") !== null) continue;
-          if (btn.className && /close/i.test(String(btn.className))) {
-            closeBtn = btn;
-            break;
-          }
-          if (closeBtn === null) closeBtn = btn;
-        }
-        if (closeBtn !== null && closeBtn.parentElement !== null) {
-          closeBtn.parentElement.insertBefore(lightsEl, closeBtn);
-        } else {
-          headerEl.appendChild(lightsEl);
-        }
-        // 找到官方 × 之后顺手给它换皮（只加标记，不碰事件与结构）。
-        // 放在这里而不是 adopt() 里：这是唯一既拿到 headerEl 又拿到 closeBtn 的地方。
-        markCloseDot(closeBtn);
-      } else {
-        panelEl.appendChild(lightsEl);
-      }
-      syncDots();
-    }
-
-    /**
-     * 给官方 × 按钮打上「这颗现在是红圆点」的标记。
-     * 只是加一个属性——按钮还是那个按钮，React 的 onClose、键盘 Enter/Space、
-     * aria-label 一字未动，样式表负责把它压成 12px 的红圆。
-     */
-    function markCloseDot(btn) {
-      if (btn === null || btn === undefined) return;
-      if (!featureOn("lights")) return;
-      closeDotEl = btn;
-      if (btn.getAttribute(ATTR_CLOSE) !== "1") btn.setAttribute(ATTR_CLOSE, "1");
-      // 视觉换成纯色圆之后，原来的「关闭」文字/图标都藏了，
-      // 无障碍名字必须留着，否则读屏只剩一个没有名字的圆点。
-      // 只在自己补的时候记一笔，卸载时才知道该不该摘掉（官方本来有名字就不动它）。
-      if (!btn.getAttribute("aria-label") && !btn.getAttribute("title")) {
-        if (btn.getAttribute("data-dsr-close-label") !== "1") {
-          btn.setAttribute("aria-label", "关闭设置");
-          btn.setAttribute("data-dsr-close-label", "1");
-        }
-      }
-    }
-
-    /** 把官方 × 恢复原生外观（关掉 lights 开关、或插件卸载时都要走一遍）。 */
-    function releaseCloseDot() {
-      if (closeDotEl === null) return;
-      const btn = closeDotEl;
-      closeDotEl = null;
-      if (btn.getAttribute(ATTR_CLOSE) === "1") btn.removeAttribute(ATTR_CLOSE);
-      if (btn.getAttribute("data-dsr-close-label") === "1") {
-        btn.removeAttribute("data-dsr-close-label");
-        btn.removeAttribute("aria-label");
-      }
     }
 
     function ensureGrip() {
@@ -635,7 +351,7 @@ window.__ModuleLoader__.load({
       }
       const nr = titleEl.getBoundingClientRect();
       const hr = headerEl.getBoundingClientRect();
-      // 红绿灯与标题行、按钮行在同一水平带上，取两者上沿的较小值再反推相对面板的偏移
+      // 标题行与按钮行在同一水平带上，取两者上沿的较小值再反推相对面板的偏移
       const pr = panelEl.getBoundingClientRect();
       const top = Math.min(nr.top, hr.top);
       return Math.max(4, Math.round(top - pr.top));
@@ -663,7 +379,7 @@ window.__ModuleLoader__.load({
         lastNatural = { w: naturalWidth, h: naturalHeight };
       }
 
-      // 接管标记：只要被接管就常驻（红绿灯、抓手、最小化规则的样式都挂在这个属性下，
+      // 接管标记：只要被接管就常驻（抓手和窗口规则的样式都挂在这个属性下，
       // 它不随「正常/拖动/最大化」的模式变化而摘除）。
       if (panelEl.getAttribute(ATTR_WIN) !== "1") panelEl.setAttribute(ATTR_WIN, "1");
 
@@ -739,7 +455,7 @@ window.__ModuleLoader__.load({
       }
 
       // ---- 抓手的纵向位置跟着标题行走
-      // 红绿灯已经住进官方 header 行，纵向由那行的 flex 排版决定，不再需要这里写 top。
+      // 标题栏控件的纵向位置由官方 header 的 flex 排版决定，不在这里写 top。
       // computeTitleBarTop 里要取三次 getBoundingClientRect（又是一次强制同步布局），
       // 落位那一帧跳过它：抓手的高度与 top 早就是 54px / 0，没必要每帧重算。
       if (gripEl !== null) {
@@ -772,20 +488,19 @@ window.__ModuleLoader__.load({
     /**
      * 关闭：现在完全交给官方 header 里那个 × 图标按钮。
      *
-     * 这里留一段说明，记着为什么不再自己造一个红点去「点一下关闭」：
+     * 这里留一段说明，记着为什么关闭必须复用官方按钮：
      * 官方设置弹窗的关闭处理器只挂在两处（见 dsh-client-ui-settings-general 的
      * SettingsPanel）——遮罩 div.mask[aria-hidden="true"] 的 onClick，以及 header 里
      * 那个 button.close。overlay 本身没有任何 React 处理器，往 overlay 上派发 click
      * 是打空的，这正是旧版「点红灯后页面残留一层黑色遮罩」的原因：面板被
      * visibility:hidden 藏掉了，但 overlay + mask 还在，于是整页被蒙上一层黑。
      *
-     * 我们的圆点只负责最大化（绿）与最小化（黄）；关闭由用户直接点官方 ×，
-     * 走的是 React 自己的路径，天然不会留下黑层。
+      * 关闭由用户直接点官方 ×，走宿主自己的路径，面板和遮罩会一起清理。
      */
 
     function setMinimized(next) {
       const want = next === true;
-      // 「点标题条还原」关掉时不允许最小化：见 syncDots 的说明，那是单向门。
+      // 「点标题条还原」关掉时不允许最小化，避免窗口收起后无法回来。
       if (want && !featureOn("restore")) return;
       if (minimized === want) return;
       minimized = want;
@@ -812,7 +527,7 @@ window.__ModuleLoader__.load({
     }
 
     function toggleMax() {
-      // 「最大化铺满会话区」关掉时绿点整体失效（见 syncDots）
+      // 「最大化铺满会话区」关掉时最大化动作整体失效
       if (!featureOn("maximize")) return;
       if (minimized === true) {
         setMinimized(false);
@@ -834,7 +549,7 @@ window.__ModuleLoader__.load({
       const dy = dragPending.dy;
       dragPending = null;
       // 拖动期间只写 transform：由合成器处理，不触发布局。
-      // 抓手与圆点都是面板的子节点，跟着面板一起动，不能再单独写一遍（会位移翻倍）。
+      // 子节点跟着面板一起移动，不需要额外修正位移。
       //
       // 这里要把位移**先夹进允许范围**，不能等到松手才夹：
       // 拖动过程只画 transform，而落位写的是 left/top。若拖过了边界，
@@ -888,7 +603,7 @@ window.__ModuleLoader__.load({
      * 松手后回收拖动期的图层提示 —— 但**不是立刻**。
      *
      * 材质（模糊、背景色、描边、投影）在拖动全程与常驻态完全一致，所以这里
-     * 不再有「玻璃回不回来」的问题；要收的只有 will-change:transform 这一个提示。
+     * 这里要收的只有 will-change:transform 这一个提示。
      * 即便如此也不和落位挤同一帧：pointerup 那一帧已经在做
      *   1) applyWindow() 写 left/top（面板从 transform 表达换回布局位置）
      *   2) clearDragTransform() 清空 transform（图层又一次失效）
@@ -909,7 +624,7 @@ window.__ModuleLoader__.load({
      * 拖动期图层提示的开关。
      *
      * 只加 will-change:transform，**不改任何视觉属性**：
-     * 曾经这里还会把 backdrop-filter 摘掉来省掉每帧模糊重采样，代价是面板
+     * 这里保持窗口材质不变，拖动只使用合成提示，面板
      * 在起手瞬间从「磨砂」变「清晰」（看上去就是背景透明度变了），松手又变回去
      * （看上去就是闪一下）。宁可让合成器老老实实每帧重采样，也不让材质在
      * 拖动前后出现任何跳变。
@@ -928,10 +643,7 @@ window.__ModuleLoader__.load({
       if (event.button !== 0) return;
       if (panelEl === null) return;
       if (minimized === true) return;
-      // 圆点自己会 stopPropagation，这里再兜一次
-      if (event.target instanceof Element && event.target.closest("[data-dsh-rail-win-lights]") !== null) return;
       // 任意位置拖动：按在交互元素上时不接管（否则点按钮会变成拖窗口）。
-      // 圆点组与官方 × 都在下面的选择器里，这里是第二道保险。
       if (event.target instanceof Element && isInteractive(event.target)) return;
       // 这里刻意不 preventDefault：面板里还有导航、输入框、可选中文字，
       // 在按下阶段就吞掉默认行为会连点击与选中一起废掉。
@@ -1049,13 +761,6 @@ window.__ModuleLoader__.load({
         gripEl.remove();
         gripEl = null;
       }
-      if (lightsEl !== null) {
-        lightsEl.remove();
-        lightsEl = null;
-      }
-      // 官方 × 的换皮也要撤销：面板可能被官方整个销毁重建，
-      // 那个按钮已随旧面板消失，这里是最后能清干净的地方。
-      releaseCloseDot();
       if (panelEl !== null) {
         panelEl.removeAttribute(ATTR_WIN);
         panelEl.removeAttribute(ATTR_DRAGGING);
@@ -1129,11 +834,10 @@ window.__ModuleLoader__.load({
         return;
       }
       titleEl.setAttribute("data-dsh-rail-win-title", "1");
-      // 圆点要住进 header 行：先给它打上标记，样式表按这个属性把 header 抬到抓手之上
+      // 标题栏只需打标，样式表据此保持在拖动抓手之上
       if (headerEl !== null) headerEl.setAttribute(ATTR_HEADER, "1");
 
       ensureGrip();
-      ensureLights();
       ensurePanelDrag();
       applyWindow();
     }
@@ -1293,7 +997,7 @@ window.__ModuleLoader__.load({
       loadState();
       installStyles();
       // 上一次挂载（宿主的 HMR 重新执行 bundle）留下的 DOM 由这里收走，
-      // 否则会出现两套红绿灯叠在一起。
+      // 否则会出现重复的标题栏控件。
       // 注意：这里不能 return —— 安装完必须 startWatch()，否则模块装载成功却永不接管。
       try {
         const previous = document[CLEANUP_KEY];
@@ -1310,22 +1014,11 @@ window.__ModuleLoader__.load({
      * 开关变化时就地收敛，而不是等下一次重开设置窗口。
      *
      * 为什么必须现在做：这几个开关都挂在「设置窗口本身」上，用户刚在窗口里
-     * 关掉红绿灯，如果还要重开窗口才生效，他会以为没生效而反复点。
+     * 开关保存后立即同步到已加载模块，避免用户误以为没有生效。
      * 每条都只做必要的复位，不重建整个面板。
      */
     function onFeaturesChanged(next) {
       if (panelEl === null) return;
-      // 红绿灯：关掉就整组摘掉（连官方 × 那颗红点一起退回原样），开回来就补建
-      // （ensureLights 自己会判断，标记也在它里面打）
-      if (!featureOn("lights")) {
-        if (lightsEl !== null) {
-          lightsEl.remove();
-          lightsEl = null;
-        }
-        releaseCloseDot();
-      } else {
-        ensureLights();
-      }
       // 拖动：整块面板都能拖，开关只决定「绑不绑 pointerdown」，
       // DOM 不用重建；正在拖的时候关掉要顺手把这次拖动收干净。
       if (drag !== null) {
@@ -1349,7 +1042,6 @@ window.__ModuleLoader__.load({
         saveState();
         applyWindow();
       }
-      syncDots();
     }
 
     exports.install = install;

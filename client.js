@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.10",
+      version: "1.0.11",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },
@@ -160,15 +160,10 @@ window.__ModuleLoader__.load({
      * 其他开关失效；关掉的功能在模块内部短路——不建 DOM、不绑事件、入口早退。
      * 默认全开：与本插件此前的行为一致，用户不动开关就什么都不会变。
      *
-     * 生效方式：保存后立即写 localStorage 并就地应用（不需要刷新）；红绿灯与
-     * 最大化还会顺手把已经处于该状态的面板复位，避免留下半截状态。
+     * 生效方式：保存后立即写 localStorage 并就地应用（不需要刷新）；相关窗口状态
+     * 还会顺手复位，避免留下半截状态。
      */
     const FEATURES = [
-      {
-        key: "lights",
-        label: "窗口控制圆点",
-        desc: "绿点最大化、黄点最小化；红点是把官方 × 换了外观，关闭行为不变",
-      },
       {
         key: "drag",
         label: "按住任意位置拖动",
@@ -182,7 +177,7 @@ window.__ModuleLoader__.load({
       {
         key: "maximize",
         label: "最大化铺满会话区",
-        desc: "绿色圆点让设置窗口铺满右侧会话区，再点还原",
+        desc: "标题栏双击让设置窗口铺满右侧会话区，再次双击还原",
       },
     ];
 
