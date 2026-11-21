@@ -1,4 +1,4 @@
-// probes/window-probe.cjs — 真实浏览器回归：设置弹窗窗口化（拖动 / 红绿灯 / 最大化 / 最小化 / 关闭 / 持久化）
+// probes/window-probe.cjs — 真实浏览器回归：设置弹窗窗口化（任意位置拖动 / 原生关闭 / 持久化）
 // 用法：node probes/window-probe.cjs
 "use strict";
 
@@ -180,12 +180,12 @@ async function main() {
           const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) || 0;
           return Math.round(t.getBoundingClientRect().y + pt + lh / 2);
         })(),
-        // 官方 × 必须是 header 的直系子按钮：红绿灯自己的 .dsr-light-close 也含 "close"，
-        // 且住在 header 里面，用后代选择器会先命中它，断言就成了「红绿灯在自己左边」。
+        // 官方 × 必须取 header 的直系子按钮：后代选择器可能先命中别的含 "close" 的元素，
+        // 断言就会去比错节点。
         // 属性值在 CSS 里大小写敏感，官方是 VOzbGW_close、回归台是 stClose，所以带 i 标志。
         closeBtn: box(p && p.querySelector('[data-dsh-rail-win-header] > button[class*="close" i]')),
-        // 官方 × 换皮成红圆点之后的外观：只看样子，按钮还是官方那一个。
-        // skinAttr 是插件打上去的标记，撤销时要能摘干净（关掉红绿灯开关的回归里查它）。
+        // 官方 × 的外观取值：按钮始终是官方那一个。
+        // skinAttr 是插件曾经打上去的换皮标记，撤销时要能摘干净。
         closeDot: (() => {
           const b = document.querySelector('[data-dsh-rail-win-header] > button[class*="close" i]');
           if (!b) return null;
@@ -231,68 +231,8 @@ async function main() {
     await openSettings();
     result.steps.opened = await panelBox();
     const o = result.steps.opened;
-    check("设置窗口不再渲染红绿灯", o.lights === null && o.dots.length === 0, { lights: o.lights, dots: o.dots });
+    check("设置窗口不再渲染窗口控制圆点", o.lights === null && o.dots.length === 0, { lights: o.lights, dots: o.dots });
     check("官方关闭按钮保持原生外观", o.closeDot !== null && o.closeDot.attr === null && o.closeDot.w === 28, o.closeDot);
-    if (false) {
-    check("设置弹窗打开后出现窗口控制圆点", o.lights !== null, o.lights);
-    check("圆点只有两个（关闭交给官方 ×，不再造红点）", o.dots.length === 2, o.dots.map((d) => d.cls));
-    check("两个圆点都是 12px 圆形",
-      o.dots.length === 2 && o.dots.every((d) => d.w === 12 && d.h === 12 && d.radius === "50%"),
-      o.dots.map((d) => d.w + "x" + d.h + " r=" + d.radius));
-    check("左→右顺序是 最大化(绿) / 最小化(黄)",
-      o.dots.length === 2 &&
-      o.dots[0].cls.indexOf("dsr-light-max") >= 0 && o.dots[0].bg === "rgb(40, 200, 64)" &&
-      o.dots[1].cls.indexOf("dsr-light-min") >= 0 && o.dots[1].bg === "rgb(254, 188, 46)",
-      o.dots.map((d) => d.cls + " " + d.bg));
-    check("没有红点残留", o.dots.every((d) => d.cls.indexOf("dsr-light-close") < 0), o.dots.map((d) => d.cls));
-    check("圆点住在官方 header 行里（不再是飘在右上角的绝对定位）",
-      o.lights !== null && o.header !== null &&
-      o.lights.x >= o.header.x - 1 && o.lights.x + o.lights.w <= o.header.x + o.header.w + 1 &&
-      o.lights.y >= o.header.y - 1 && o.lights.y + o.lights.h <= o.header.y + o.header.h + 1,
-      { header: o.header, lights: o.lights });
-    check("圆点排在官方 × 的左边，不与之重叠",
-      o.lights !== null && o.closeBtn !== null &&
-      o.lights.x + o.lights.w <= o.closeBtn.x + 1,
-      { lightsRight: o.lights ? o.lights.x + o.lights.w : null, closeBtnLeft: o.closeBtn ? o.closeBtn.x : null });
-    // 圆点只有 12px，官方 × 是 28px；两者垂直中心要落在同一条线上，
-    // 那条线也正好是左侧「设置」标题（22px padding + 24px 行高）的中线。
-    check("圆点与官方 × 垂直居中对齐（同一水平线）",
-      o.lights !== null && o.closeBtn !== null &&
-      Math.abs((o.lights.y + o.lights.h / 2) - (o.closeBtn.y + o.closeBtn.h / 2)) <= 2,
-      { lightsCenterY: o.lights ? o.lights.y + o.lights.h / 2 : null,
-        closeCenterY: o.closeBtn ? o.closeBtn.y + o.closeBtn.h / 2 : null });
-    check("圆点与左侧「设置」标题在同一水平线上",
-      o.lights !== null && o.titleCenterY !== null &&
-      Math.abs((o.lights.y + o.lights.h / 2) - o.titleCenterY) <= 3,
-      { lightsCenterY: o.lights ? o.lights.y + o.lights.h / 2 : null,
-        titleCenterY: o.titleCenterY });
-    check("接管后打上了 data-dsh-rail-win", o.attr === "1", o.attr);
-
-    // ------------------------------------------- 1b. 官方 × 换皮成红圆点
-    // 这是「只换 logo」的验收：样子要变成和另两颗同款的 12px 红圆，
-    // 但按钮还是官方那一个（同一个 DOM 节点、同一个 class、同一个 onClose），
-    // 且无障碍名字与点击热区都不能因为视觉变小而丢。
-    check("官方 × 被打上换皮标记", o.closeDot !== null && o.closeDot.attr === "1", o.closeDot && o.closeDot.attr);
-    check("官方 × 看起来是 12px 的红圆点",
-      o.closeDot !== null && o.closeDot.w === 12 && o.closeDot.h === 12 &&
-      o.closeDot.radius === "50%" && o.closeDot.bg === "rgb(255, 95, 87)",
-      o.closeDot && { size: o.closeDot.w + "x" + o.closeDot.h, radius: o.closeDot.radius, bg: o.closeDot.bg });
-    check("官方 × 与另两颗圆点落在同一条水平线上",
-      o.closeDot !== null && o.lights !== null &&
-      Math.abs(o.closeDot.cy - (o.lights.y + o.lights.h / 2)) <= 2,
-      { closeDotCenterY: o.closeDot ? o.closeDot.cy : null,
-        lightsCenterY: o.lights ? o.lights.y + o.lights.h / 2 : null });
-    check("官方 × 的无障碍名字还在（视觉变小不等于读屏失声）",
-      o.closeDot !== null && typeof o.closeDot.label === "string" && o.closeDot.label.length > 0,
-      o.closeDot && o.closeDot.label);
-    check("官方 × 压成 12px 后点击热区仍撑到 28px（左右各 8px 仍能点中）",
-      o.closeDot !== null && o.closeDot.hitLeft === true && o.closeDot.hitRight === true,
-      o.closeDot && { hitLeft: o.closeDot.hitLeft, hitRight: o.closeDot.hitRight });
-    check("拖动抓手存在", o.grip !== null, o.grip);
-    await shot("shot-window-open.png");
-
-    }
-
     // ------------------------------------------------------------- 2. 拖动移动
     // 需求是「面板任意位置都能按住拖走」，所以这里刻意不从抓手起拖，
     // 而是在面板里现找一个**不是交互元素**的落点（列表行、说明文字、空白处都算），
@@ -300,7 +240,7 @@ async function main() {
     const freePoint = await evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return null;
-      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"]';
       const r = p.getBoundingClientRect();
       for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
         for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
@@ -329,21 +269,12 @@ async function main() {
     check("拖动后位置写进 localStorage",
       d1.stored !== null && (() => { try { const s = JSON.parse(d1.stored); return s.mode === "dragged"; } catch (e) { return false; } })(),
       d1.stored);
-    check("拖动过程中仍不创建红绿灯", d1.lights === null && d1.dots.length === 0, d1.lights); /*
-      d1.lights !== null && d1.panel !== null && o.lights !== null && o.panel !== null &&
-      Math.abs((d1.lights.x - d1.panel.x) - (o.lights.x - o.panel.x)) <= 2 &&
-      Math.abs((d1.lights.y - d1.panel.y) - (o.lights.y - o.panel.y)) <= 2,
-      { beforeOffset: o.lights && o.panel ? [o.lights.x - o.panel.x, o.lights.y - o.panel.y] : null,
-        afterOffset: d1.lights && d1.panel ? [d1.lights.x - d1.panel.x, d1.lights.y - d1.panel.y] : null });
-    */
+    check("拖动过程中仍不创建窗口控制圆点", d1.lights === null && d1.dots.length === 0, d1.lights);
      await shot("shot-window-dragged.png");
 
     // ---------------------- 2a. 拖动期材质恒定：只加 will-change，一个像素都不改
-    // 曾经为了压掉「模糊每帧重采样」的性能开销，拖动期间把 backdrop-filter 摘掉 ——
-    // 代价是面板在起手瞬间从磨砂变清晰（用户看到的是「背景透明度变了」），
-    // 松手又变回磨砂（用户看到的是「闪一下」）。现在改成材质全程恒定，
-    // 性能由别的优化承担（真实鼠标长任务断言在最后一段压测里验）。
-    // 所以这里断言的不再是「模糊被摘掉」，而是**拖动中与常驻态逐项相同**。
+    // 面板材质完全沿用宿主提供的普通样式，拖动期间只加 will-change:transform，
+    // 不写任何视觉属性，所以这里断言的是**拖动中与常驻态逐项相同**。
     const readDragStyles = () => evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return null;
@@ -360,7 +291,7 @@ async function main() {
     const dragPoint2 = await evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return null;
-      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"]';
       const r = p.getBoundingClientRect();
       for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
         for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
@@ -406,7 +337,7 @@ async function main() {
       check("松手后背景色仍是同一条",
         same(beforeDragStyle, afterDragStyle, "background"),
         { before: beforeDragStyle && beforeDragStyle.background, after: afterDragStyle && afterDragStyle.background });
-      check("拖动前本来就没有液态玻璃模糊",
+      check("拖动前本来就没有模糊滤镜（宿主普通材质）",
         beforeDragStyle !== null && !/blur/.test(String(beforeDragStyle.backdrop)), beforeDragStyle && beforeDragStyle.backdrop);
     } else {
       check("拖动中面板挂上拖动标记（data-dsh-rail-win-dragging=1）", false, "找不到落点");
@@ -471,7 +402,7 @@ async function main() {
     const freePoint2 = await evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return null;
-      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"]';
       const r = p.getBoundingClientRect();
       for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
         for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
@@ -497,7 +428,7 @@ async function main() {
     const freePoint3 = await evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return null;
-      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"]';
       const r = p.getBoundingClientRect();
       for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
         for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
@@ -555,75 +486,30 @@ async function main() {
       check("松手后没有残留 transform（落位改由 left/top 表达）", false, "找不到落点");
     }
 
-    // ------------------------------------------------ 3. 最大化：铺满会话区
-    // 红绿灯已移除，最大化保留标题栏双击入口。
+    // ------------------------------------- 3. 标题栏双击不应再触发任何窗口动作
+    // 「点标题条还原」与「最大化铺满会话区」两个功能整体删除后，    // 双击标题栏不应改变窗口几何，也不应把面板收成一条。
     const cur = await panelBox();
-    const maxBtn = centerOf(cur.title || cur.header);
-    await mouse("mousePressed", maxBtn.x, maxBtn.y, { clickCount: 1 });
-    await mouse("mouseReleased", maxBtn.x, maxBtn.y, { clickCount: 1 });
-    await mouse("mousePressed", maxBtn.x, maxBtn.y, { clickCount: 2 });
-    await mouse("mouseReleased", maxBtn.x, maxBtn.y, { clickCount: 2 });
+    const dblPt = centerOf(cur.title);
+    await mouse("mousePressed", dblPt.x, dblPt.y, { clickCount: 1 });
+    await mouse("mouseReleased", dblPt.x, dblPt.y, { clickCount: 1 });
+    await mouse("mousePressed", dblPt.x, dblPt.y, { clickCount: 2 });
+    await mouse("mouseReleased", dblPt.x, dblPt.y, { clickCount: 2 });
     await sleep(420);
-    result.steps.maximized = await panelBox();
-    const m1 = result.steps.maximized;
-    check("最大化后打上 data-dsh-rail-win-max", m1.max === "1", m1.max);
-    check("最大化后铺满会话区（左边贴左侧栏右缘，右边到视口右缘）",
-      m1.panel !== null &&
-      Math.abs(m1.panel.x - m1.railRight) <= 2 &&
-      Math.abs(m1.panel.x + m1.panel.w - (m1.vw - 8)) <= 2 &&
-      m1.panel.y >= 0 && m1.panel.y + m1.panel.h <= m1.vh,
-      { panel: m1.panel, railRight: m1.railRight, vw: m1.vw, vh: m1.vh });
-    check("最大化不会盖住左侧竖轨",
-      m1.panel !== null && m1.panel.x >= m1.railRight - 1,
-      { panelX: m1.panel ? m1.panel.x : null, railRight: m1.railRight });
-    check("最大化后窗口比原尺寸大", m1.panel !== null && m1.panel.w > base.w, { max: m1.panel ? m1.panel.w : null, base: base.w });
-    await shot("shot-window-max.png");
+    result.steps.dblclickTitle = await panelBox();
+    const dc = result.steps.dblclickTitle;
+    check("标题栏双击不再改变窗口状态（没有 win-max 标记）", dc.max === null && dc.panel !== null, dc.max);
+    check("标题栏双击后窗口几何不变",
+      dc.panel !== null && Math.abs(dc.panel.x - cur.panel.x) <= 3 && Math.abs(dc.panel.w - cur.panel.w) <= 3,
+      { now: dc.panel, want: cur.panel });
+    await shot("shot-window-dblclick.png");
 
-    // 再点一次回到原尺寸
-    const maxBtn2 = centerOf(m1.title);
-    await mouse("mousePressed", maxBtn2.x, maxBtn2.y, { clickCount: 2 });
-    await mouse("mouseReleased", maxBtn2.x, maxBtn2.y, { clickCount: 2 });
-    await sleep(420);
-    result.steps.unmaximized = await panelBox();
-    check("再点最大化回到拖动后的位置与尺寸",
-      result.steps.unmaximized.max === null &&
-      Math.abs(result.steps.unmaximized.panel.x - cur.panel.x) <= 3 &&
-      Math.abs(result.steps.unmaximized.panel.w - cur.panel.w) <= 3,
-      { now: result.steps.unmaximized.panel, want: cur.panel });
-
-    if (false) {
-    // ---------------------------------------------------------- 4. 最小化
-    const u1 = result.steps.unmaximized;
-    const minBtn = centerOf(u1.title);
-    await mouse("mousePressed", minBtn.x, minBtn.y);
-    await mouse("mouseReleased", minBtn.x, minBtn.y);
-    await sleep(420);
-    result.steps.minimized = await panelBox();
-    const n1 = result.steps.minimized;
-    check("最小化后打上 data-dsh-rail-win-min", n1.min === "1", n1.min);
-    check("最小化后收成一条（高度 54，宽度收窄）",
-      n1.panel !== null && n1.panel.h === 54 && n1.panel.w <= 320,
-      n1.panel);
-    check("最小化后仍在可视区", n1.panel !== null && n1.panel.x >= 0 && n1.panel.x < n1.vw && n1.panel.y >= 0 && n1.panel.y < n1.vh, n1.panel);
-    check("最小化后内容区被隐藏",
-      (await evalJs("(() => { const p = window.__HARNESS__.panel(); const o = p && p.querySelector('.stOptions'); return o ? getComputedStyle(o).display : 'gone'; })()")) === "none");
-    await shot("shot-window-min.png");
-
-    // 点最小化后的标题条还原
-    const barPt = centerOf({ x: n1.panel.x + 12, y: n1.panel.y, w: 80, h: 54 });
-    await mouse("mousePressed", barPt.x, barPt.y);
-    await mouse("mouseReleased", barPt.x, barPt.y);
-    await sleep(420);
-    result.steps.restored = await panelBox();
-    check("点最小化后的标题条能还原",
-      result.steps.restored.min === null && result.steps.restored.panel.h > 54,
-      { min: result.steps.restored.min, panel: result.steps.restored.panel });
-
-    }
+    // 最小化入口随功能删除一起移除，这里确认不会出现收成一条的状态
+    check("面板不会进入收起状态（没有 win-min 标记）", dc.min === null, dc.min);
 
     // ------------------------------------------------------- 5. 刷新后保持
-    // 以「还原后」的实时位置为准（2b 又拖过几次，d1 已过期）
-    const beforeReload = result.steps.unmaximized.panel;
+    // 以刷新前的实时位置为准（前面还做过「拖到边界被夹回来」等动作，
+    // 早期采样到的 result.steps.dragged 已经不是最后落位）
+    const beforeReload = (await panelBox()).panel;
     await c.send("Page.navigate", { url: PAGE });
     for (let i = 0; i < 120; i++) {
       if (await evalJs("typeof window.__HARNESS__ !== 'undefined'")) break;
@@ -647,7 +533,7 @@ async function main() {
     await sleep(420);
     result.steps.closed = { open: await evalJs("window.__HARNESS__.settingsOpen()"), visible: await evalJs(`(() => { const p = window.__HARNESS__.panel(); if (!p) return false; const cs = getComputedStyle(p); return cs.visibility !== "hidden" && cs.display !== "none"; })()`) };
     check("点官方 × 关闭：窗口不可见（hidden 或已从 DOM 摘掉）", result.steps.closed.open === false || result.steps.closed.visible === false, result.steps.closed);
-    check("关闭后不残留红绿灯控制点",
+    check("关闭后不残留任何窗口控制点",
       (await evalJs(`(() => !document.querySelector('[data-dsh-rail-win-lights]'))()`)) === true);
 
     // --------------------------------- 7. Esc 仍能关闭 + 无 diag 错误 + 无长任务
@@ -714,7 +600,7 @@ async function main() {
     const stressPoint = await evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return null;
-      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"]';
       const r = p.getBoundingClientRect();
       for (let y = Math.round(r.bottom) - 60; y > r.top + 60; y -= 12) {
         for (let x = Math.round(r.left) + 30; x < r.right - 200; x += 24) {

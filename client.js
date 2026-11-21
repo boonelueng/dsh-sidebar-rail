@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.11",
+      version: "1.0.12",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },
@@ -160,24 +160,13 @@ window.__ModuleLoader__.load({
      * 其他开关失效；关掉的功能在模块内部短路——不建 DOM、不绑事件、入口早退。
      * 默认全开：与本插件此前的行为一致，用户不动开关就什么都不会变。
      *
-     * 生效方式：保存后立即写 localStorage 并就地应用（不需要刷新）；相关窗口状态
-     * 还会顺手复位，避免留下半截状态。
+     * 生效方式：保存后立即写 localStorage 并就地应用（不需要刷新）。
      */
     const FEATURES = [
       {
         key: "drag",
         label: "按住任意位置拖动",
         desc: "按住设置窗口的任意位置（按钮、输入框等交互元素除外）把它拖走",
-      },
-      {
-        key: "restore",
-        label: "点标题条还原",
-        desc: "最小化收成一条后，点那条标题栏展开回来",
-      },
-      {
-        key: "maximize",
-        label: "最大化铺满会话区",
-        desc: "标题栏双击让设置窗口铺满右侧会话区，再次双击还原",
       },
     ];
 

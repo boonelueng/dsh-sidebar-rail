@@ -124,8 +124,7 @@ DSH 自带的设置弹窗是一块居中的固定面板，盖在遮罩上，只�
 - **窗口外观**：保持宿主提供的普通设置窗口样式，不再注入液态玻璃模糊、透明背景或高光阴影，也不再添加红黄绿控制圆点。
 - **官方关闭**：保留宿主原生 × 按钮、无障碍名称、热区与关闭路径。
 
-- **最大化 = 铺满会话区**：左边界取左侧栏右缘（也就是竖轨和会话区让位之后的位置），右、上、下各留 8px；不会盖住左侧竖轨
-- 位置与状态存在 `localStorage` 的 `dsh-sidebar-rail.win.v1`
+- 位置存在 `localStorage` 的 `dsh-sidebar-rail.win.v1`
 - 拖动只写合成层 `transform`（`translate3d`）+ `requestAnimationFrame` 合帧，不触发布局重排；松手才写 `left / top`
 - **拖动期不卡，但材质一个像素都不动**：
   - **只加图层提示**：确认拖动后给面板打 `data-dsh-rail-win-dragging="1"`，CSS 只加 `will-change:transform`，不改变宿主提供的普通材质。
@@ -143,22 +142,20 @@ DSH 自带的设置弹窗是一块居中的固定面板，盖在遮罩上，只�
 
 grid-area 的识别方式是**按后缀**匹配：官方模板写作 `"VOzbGW_title VOzbGW_header"`，`VOzbGW_` 是构建哈希、每次发版都会变，所以只看每一格是否以 `title` / `header` 结尾。
 
-### 三个功能各自可关
+### 一个功能可关
 
-窗口化行为拆成三个独立开关，放在**设置 → 侧边栏条目**这一节的最上面：
+窗口化行为只剩一个独立开关，放在**设置 → 侧边栏条目**这一节的最上面：
 
 | 开关 | 键 | 关掉之后 |
 | --- | --- | --- |
 | 按住面板任意位置拖动 | `drag` | 面板不再能拖动，光标退回常态 |
-| 点标题条还原 | `restore` | 不启用标题条还原路径 |
-| 最大化铺满会话区 | `maximize` | 不再执行最大化 |
 
-三个开关保存后立即生效并写入 `localStorage` 的 `dsh-sidebar-rail.features.v1`；刷新后按原状态恢复。默认三个全开，缺字段或脏数据按开启处理。
+开关保存后立即生效并写入 `localStorage` 的 `dsh-sidebar-rail.features.v1`；刷新后按原状态恢复。默认开启，缺字段或脏数据按开启处理。
 
 恢复：
 
 ```js
-localStorage.removeItem('dsh-sidebar-rail:off')
+localStorage.removeItem('dsh-sidebar-rail.features.v1')
 ```
 
 然后刷新页面。
@@ -176,7 +173,7 @@ localStorage.removeItem('dsh-sidebar-rail:off')
 - `disabled: 'collapsed' | 'switch' | null` 表示当前为什么没接管
 - `anchors` 里哪一项是 `false`，就是那个锚点没找到
 - `floating` / `floatPos` 是当前悬浮态与落位坐标
-- `features` 是三个功能开关的当前状态（`{ drag, restore, maximize }`）
+- `features` 是功能开关的当前状态（`{ drag }`）
 - `errors` 里是运行期异常
 
 ## 安装
@@ -223,8 +220,8 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/probe-final.cjs` | 端到端回归：齿轮已消失、展开/收起、设置页里增 / 删 / 保存写回轨道、刷新后保持 |
 | `probes/drag-probe.cjs` | 拖拽排序：ghost / 半透明占位 / FLIP / `order` 变更 / 落盘 / 刷新还原 / 自定义条目重排 / 点击抑制 |
 | `probes/float-probe.cjs` | 悬浮：进出悬浮态、自动展开/停靠自动收起、抓手出现、`translate3d` 拖动、坐标夹取与落盘、**首次落位即写盘**、**三段无缝衔接（含刷新后与 nav 长高后）**、刷新还原、双击停靠、缩窗口不跑丢、**拖动无长任务** |
-| `probes/window-probe.cjs` | 侧栏「从左侧栏取消固定」已隐藏、更多菜单仍保留；设置窗口普通无模糊材质、官方关闭按钮、任意非交互区域拖动、标题栏拖动、越界夹紧、最大化铺满会话区且不盖竖轨、关闭清理、真实鼠标拖动性能与帧间隔回归 |
-| `probes/features-probe.cjs` | 三项功能开关（拖动 / 标题条还原 / 最大化）渲染、持久化、刷新恢复、开关即时生效、无红绿灯与原生关闭按钮、诊断无异常 |
+| `probes/window-probe.cjs` | 侧栏「从左侧栏取消固定」已隐藏、更多菜单仍保留；设置窗口普通无模糊材质、官方关闭按钮、任意非交互区域拖动、越界夹紧、标题栏双击不再最大化、关闭清理、真实鼠标拖动性能与帧间隔回归 |
+| `probes/features-probe.cjs` | 单一功能开关（拖动）渲染、持久化、刷新恢复、开关即时生效、无红绿灯与原生关闭按钮、诊断无异常 |
 
 `drag-probe.cjs`、`float-probe.cjs`、`window-probe.cjs` 与 `features-probe.cjs` 自带静态回归台（`probes/drag-harness.html` 复刻 DSH 侧边栏与设置弹窗的 DOM 骨架 + 加载真实 `client.js`；`probes/features-harness.html` 在此基础上加了 `react` 桩与 `slots.inject` 留档，好让设置页那一节真能被挂起来），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
 
@@ -257,7 +254,7 @@ node verify-modules.cjs
 | `client.drag.js` | 轨道图标与自定义条目的鼠标拖拽排序（FLIP） | 面板图标退回原生顺序，仍可点击 |
 | `client.float.js` | 竖轨整体悬浮、拖动、双击停靠、自动展开/收起 | 轨道上不出现「悬浮」按钮，其余照常 |
 | `client.settings.js` | 条目编辑（DSH 设置页一节 + 内联弹层 + 导入导出） | 设置页里那一节空白，条目仍按默认两条渲染 |
-| `client.window.js` | 设置弹窗窗口化：拖拽移动、标题栏最大化/还原，以及三个功能开关的就地启停；保持官方关闭按钮和普通材质 | 设置弹窗退回官方原样 |
+| `client.window.js` | 设置弹窗窗口化：按住任意位置拖动，以及拖动开关的就地启停；保持官方关闭按钮和普通材质 | 设置弹窗退回官方原样 |
 
 功能开关本身住在内核（`client.js` 的 `FEATURES` / `featureState` / `getFeature` / `setFeature`），不由模块持有：状态要能跨模块共享，也要能在模块缺席时照样读得到。`client.settings.js` 只负责把它们画成开关，`client.window.js` 只负责按状态干活。
 

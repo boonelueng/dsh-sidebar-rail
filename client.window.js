@@ -3,7 +3,6 @@
  *
  * 给 DSH 官方的设置弹窗补上桌面窗口的行为：
  *   - 按住面板任意位置都能拖动整个窗口（按钮、输入框等交互元素除外）；
- *   - 标题栏双击可最大化，再次双击还原；
  *   - 关闭 = 官方 header 的原生 × 按钮，行为与外观均由宿主提供。
  *
  * 设计上只用「官方设置弹窗本来就有的 DOM 契约」定位：
@@ -26,7 +25,6 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------- 内核契约
     let api = null;
     let diag = null;
-    let el = null;
 
     function pushError(message) {
       if (api !== null && typeof api.pushError === "function") api.pushError("window: " + message);
@@ -35,9 +33,9 @@ window.__ModuleLoader__.load({
     /**
      * 读一个功能开关。
      *
-     * 四个功能（标题栏拖动 / 点标题条还原 / 最大化铺满）各自独立开关，
-     * 都在 DSH 设置页「侧边栏条目」里。拿不到内核状态时一律当「开」：
-     * 内核没暴露开关（老版本内核）或读取抛错时，宁可保持旧行为，也不要突然少功能。
+     * 功能开关（「按住任意位置拖动」）由内核管，条目在 DSH 设置页「侧边栏条目」里。
+     * 拿不到内核状态时一律当「开」：内核没暴露开关（老版本内核）或读取抛错时，
+     * 宁可保持旧行为，也不要突然少功能。
      */
     function featureOn(name) {
       if (api === null || typeof api.getFeature !== "function") return true;
@@ -50,7 +48,6 @@ window.__ModuleLoader__.load({
 
     // ------------------------------------------------------------------- 常量
     const ATTR_WIN = "data-dsh-rail-win";
-    const ATTR_GRIP = "data-dsh-rail-win-grip";
     const ATTR_HEADER = "data-dsh-rail-win-header";
     const ATTR_DRAG = "data-dsh-rail-win-drag";
     const ATTR_DRAGGING = "data-dsh-rail-win-dragging";
@@ -60,7 +57,6 @@ window.__ModuleLoader__.load({
     const CLEANUP_KEY = "__dshRailWindow";
 
     const DRAG_THRESHOLD = 3;
-    const VIEWPORT_GAP = 8;
 
     /**
      * 按住这里面的东西不算「拖窗口」，要把事件让给它们自己：
@@ -85,14 +81,11 @@ window.__ModuleLoader__.load({
       "[role='switch']",
     ].join(",");
 
-    // 三条状态：
+    // 两条状态：
     //   normal  – 官方居中布局，未做任何位移
     //   dragged – 用户拖到过某处，按 left/top 摆放
-    //   max     – 铺满会话区
-    // minimized 独立成布尔值，与上面三条正交。
     const MODE_NORMAL = "normal";
     const MODE_DRAGGED = "dragged";
-    const MODE_MAX = "max";
 
     // ------------------------------------------------------------------- 状态
     let styleEl = null;
@@ -100,13 +93,10 @@ window.__ModuleLoader__.load({
     let scheduleId = 0;
     let panelEl = null;
     let overlayEl = null;
-    let gripEl = null;
     let titleEl = null;
     let headerEl = null;
-    let toggleEl = null;
 
     let mode = MODE_NORMAL;
-    let minimized = false;
     let posX = 0;
     let posY = 0;
     let drag = null;
@@ -125,8 +115,7 @@ window.__ModuleLoader__.load({
         if (raw === null) return;
         const saved = JSON.parse(raw);
         if (saved === null || typeof saved !== "object") return;
-        if (saved.mode === MODE_DRAGGED || saved.mode === MODE_MAX || saved.mode === MODE_NORMAL) mode = saved.mode;
-        if (saved.minimized === true) minimized = true;
+        if (saved.mode === MODE_DRAGGED || saved.mode === MODE_NORMAL) mode = saved.mode;
         if (Number.isFinite(saved.x)) posX = Math.round(saved.x);
         if (Number.isFinite(saved.y)) posY = Math.round(saved.y);
       } catch (err) {
@@ -138,7 +127,7 @@ window.__ModuleLoader__.load({
       try {
         window.localStorage.setItem(
           STORAGE_WIN,
-          JSON.stringify({ mode: mode, minimized: minimized === true, x: posX, y: posY })
+          JSON.stringify({ mode: mode, x: posX, y: posY })
         );
       } catch (err) {
         pushError("saveState 失败：" + String(err));
@@ -154,16 +143,6 @@ window.__ModuleLoader__.load({
       "-webkit-user-select:none!important;user-select:none!important;",
       "}",
 
-      /* 标题栏覆盖层：最小化后整块面板只剩一条，点这条（不拖动）就还原。
-         它自己不放任何文字，所以不会和官方的「设置」标题打架；
-         拖动已经提升到整块面板（见 [data-dsh-rail-win-drag]），不再依赖这一层。 */
-      "[data-dsh-rail-win] > [data-dsh-rail-win-grip]{",
-      "position:absolute;left:0;right:0;top:0;height:54px;",
-      "display:flex!important;align-items:center!important;justify-content:flex-end!important;",
-      "padding-right:104px;box-sizing:border-box;",
-      "touch-action:none;-webkit-user-drag:none;user-select:none;",
-      "z-index:0;",
-      "}",
       /* 任意位置拖动开着时：整块面板给 grab 光标，按住任何非交互处都能拖走。
          关掉拖动就摘掉这个属性，光标立刻退回常态，不会「看起来能拖其实拖不动」。 */
       "[data-dsh-rail-win][data-dsh-rail-win-drag='1']{cursor:grab}",
@@ -179,44 +158,15 @@ window.__ModuleLoader__.load({
       "body.dsr-win-dragging{cursor:grabbing!important;user-select:none!important}",
       "body.dsr-win-dragging [data-dsh-rail-win]{cursor:grabbing!important}",
 
-      /* 官方 header 行抬到抓手之上：抓手是覆盖整条标题栏的绝对定位层（z-index:0），
-         官方 header 行抬到抓手之上，避免被覆盖。 */
+      /* 官方 header 行：只做层级保护，保证按钮不被别的图层盖住。 */
       "[data-dsh-rail-win] > [data-dsh-rail-win-header]{",
       "position:relative;z-index:2;",
-      "}",
-
-       /* 最小化：收成一条停在本位的标题栏，点击任意处还原。 */
-      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"]{",
-      "width:var(--dsr-win-min-w,240px)!important;max-width:none!important;",
-      "height:54px!important;min-height:0!important;",
-      "grid-template:\"t h\"!important;grid-template-columns:minmax(0,1fr) auto!important;",
-      "overflow:hidden!important;",
-      "}",
-      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > :not([data-dsh-rail-win-title]):not([data-dsh-rail-win-grip]):not([data-dsh-rail-win-header]){",
-      "display:none!important;",
-      "}",
-      /* 最小化时保留 header，避免标题栏结构被破坏；header 内的官方按钮
-         （「打开配置文件」+ ×）在收成一条的状态下隐藏。 */
-      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > [data-dsh-rail-win-header]{",
-      "display:flex!important;align-items:center!important;height:100%!important;padding:0 10px 0 0!important;",
-      "}",
-      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] > [data-dsh-rail-win-header] > button{",
-      "display:none!important;",
-      "}",
-      "[data-dsh-rail-win][data-dsh-rail-win-min=\"1\"] [data-dsh-rail-win-title]{cursor:pointer}",
-
-      /* 最大化：铺满侧边栏右侧的会话区，用圆角做一点桌面窗口的观感。 */
-      "[data-dsh-rail-win][data-dsh-rail-win-max=\"1\"]{",
-      "position:fixed!important;",
-      "border-radius:var(--dsw-radius-panel,12px)!important;",
       "}",
 
        /* ---- 拖动期：只做「图层提示」，不改任何像素 ----
          拖动只写 transform，本该由合成器直接搬运。这里在拖动过程中给面板加
          will-change:transform，让浏览器提前把它当成要动的图层。
-         以前为了压掉模糊的每帧重采样，曾在拖动中把模糊摘掉 —— 结果正是
-         「拖起来背景忽然变清晰（看起来像透明度变了）、松手又变回去（闪一下）」。
-         材质必须全程恒定：模糊半径、背景色、描边、投影一律不动，
+         面板材质完全沿用宿主提供的普通样式，拖动前后不写任何视觉属性，
          拖动态与常驻态看起来一模一样，起手和落手才不会各闪一次。 */
       "[data-dsh-rail-win][data-dsh-rail-win-dragging=\"1\"]{",
       "will-change:transform!important;",
@@ -246,25 +196,6 @@ window.__ModuleLoader__.load({
         h: Math.round(rect.height),
       };
     }
-
-    /** 最大化时铺满的矩形：侧边栏右侧到视口右缘，上下留一点边。 */
-    function maxRect() {
-      const vw = window.innerWidth || 1280;
-      const vh = window.innerHeight || 800;
-      let left = VIEWPORT_GAP;
-      const root = document.querySelector("[data-dsh-rail-root]");
-      if (root !== null) {
-        const r = root.getBoundingClientRect();
-        if (r.width > 0 && r.right > left) left = Math.round(r.right);
-      }
-      return {
-        x: left,
-        y: VIEWPORT_GAP,
-        w: Math.max(320, vw - left - VIEWPORT_GAP),
-        h: Math.max(240, vh - VIEWPORT_GAP * 2),
-      };
-    }
-
     function clampPos(x, y, w, h) {
       const vw = window.innerWidth || 1280;
       const vh = window.innerHeight || 800;
@@ -277,35 +208,6 @@ window.__ModuleLoader__.load({
         x: Math.round(Math.min(maxX, Math.max(minX, x))),
         y: Math.round(Math.min(maxY, Math.max(minY, y))),
       };
-    }
-
-    function ensureGrip() {
-      if (gripEl !== null && gripEl.isConnected) return;
-      gripEl = el("div", { "data-dsh-rail-win-grip": "1", "aria-hidden": "true" }, null);
-      // 抓手只负责两件事：最小化后点它还原、双击切换最大化。
-      // 拖动本身不挂在这里了 —— 整块面板任意位置都能拖（见 ensurePanelDrag）。
-      gripEl.addEventListener("pointerup", onGripPointerUpRestore);
-      gripEl.addEventListener("dblclick", onGripDblClick);
-      panelEl.insertBefore(gripEl, panelEl.firstChild);
-    }
-
-    /** 最小化后只剩一条标题栏，点它（不拖动）就还原。 */
-    function onGripPointerUpRestore(event) {
-      if (event.button !== undefined && event.button !== 0) return;
-      if (drag !== null && drag.active === true) return;
-      if (!featureOn("restore")) return;
-      if (minimized === true) setMinimized(false);
-    }
-
-    /** 双击标题条：最小化时还原，其余情况切换最大化。 */
-    function onGripDblClick(event) {
-      event.preventDefault();
-      if (!featureOn("restore") && minimized === true) return;
-      if (minimized === true) {
-        setMinimized(false);
-        return;
-      }
-      toggleMax();
     }
 
     /**
@@ -344,19 +246,6 @@ window.__ModuleLoader__.load({
       return node.closest(INTERACTIVE_SEL) !== null;
     }
 
-    function computeTitleBarTop() {
-      if (titleEl === null || headerEl === null) {
-        // 找不到标题区或按钮行时，用一个稳定的经验值兜底（官方 panel 上内边距 6px + 标题行 22px）
-        return 7;
-      }
-      const nr = titleEl.getBoundingClientRect();
-      const hr = headerEl.getBoundingClientRect();
-      // 标题行与按钮行在同一水平带上，取两者上沿的较小值再反推相对面板的偏移
-      const pr = panelEl.getBoundingClientRect();
-      const top = Math.min(nr.top, hr.top);
-      return Math.max(4, Math.round(top - pr.top));
-    }
-
     /**
      * 把当前状态完整落到 DOM 上。所有写入都先比对再写，避免无谓的样式重算。
      *
@@ -379,34 +268,13 @@ window.__ModuleLoader__.load({
         lastNatural = { w: naturalWidth, h: naturalHeight };
       }
 
-      // 接管标记：只要被接管就常驻（抓手和窗口规则的样式都挂在这个属性下，
-      // 它不随「正常/拖动/最大化」的模式变化而摘除）。
+      // 接管标记：只要被接管就常驻（窗口规则的样式都挂在这个属性下，
+      // 它不随「正常/拖动」的模式变化而摘除）。
       if (panelEl.getAttribute(ATTR_WIN) !== "1") panelEl.setAttribute(ATTR_WIN, "1");
-
-      // ---- 最小化：只保留标题条
-      if (minimized === true) {
-        if (panelEl.getAttribute("data-dsh-rail-win-min") !== "1") panelEl.setAttribute("data-dsh-rail-win-min", "1");
-      } else if (panelEl.hasAttribute("data-dsh-rail-win-min")) {
-        panelEl.removeAttribute("data-dsh-rail-win-min");
-      }
-
-      // ---- 最大化标记
-      if (mode === MODE_MAX && minimized !== true) {
-        if (panelEl.getAttribute("data-dsh-rail-win-max") !== "1") panelEl.setAttribute("data-dsh-rail-win-max", "1");
-      } else if (panelEl.hasAttribute("data-dsh-rail-win-max")) {
-        panelEl.removeAttribute("data-dsh-rail-win-max");
-      }
 
       // ---- 位置与尺寸
       let box = null;
-      if (minimized === true) {
-        // 最小化时停在「当前应处的位置」，宽度收成一条
-        const w = Math.min(320, Math.max(200, Math.round(naturalWidth)));
-        const anchor = mode === MODE_MAX ? maxRect() : { x: posX, y: posY };
-        box = { x: anchor.x, y: anchor.y, w: w, h: 54 };
-      } else if (mode === MODE_MAX) {
-        box = maxRect();
-      } else if (mode === MODE_DRAGGED) {
+      if (mode === MODE_DRAGGED) {
         const clamped = clampPos(posX, posY, naturalWidth, naturalHeight);
         if (clamped.x !== posX || clamped.y !== posY) {
           posX = clamped.x;
@@ -426,53 +294,19 @@ window.__ModuleLoader__.load({
         if (panelEl.style.margin !== "") panelEl.style.margin = "";
         if (panelEl.style.transform !== "") panelEl.style.transform = "";
       } else {
-        const isMax = mode === MODE_MAX && minimized !== true;
-        if (isMax) {
-          if (panelEl.style.position !== "fixed") panelEl.style.position = "fixed";
-          if (panelEl.style.margin !== "0") panelEl.style.margin = "0";
-          panelEl.style.left = box.x + "px";
-          panelEl.style.top = box.y + "px";
-          panelEl.style.width = box.w + "px";
-          panelEl.style.height = box.h + "px";
-          panelEl.style.maxWidth = "none";
-        } else if (minimized === true) {
-          if (panelEl.style.position !== "fixed") panelEl.style.position = "fixed";
-          if (panelEl.style.margin !== "0") panelEl.style.margin = "0";
-          panelEl.style.left = box.x + "px";
-          panelEl.style.top = box.y + "px";
-          panelEl.style.width = box.w + "px";
-          panelEl.style.height = "54px";
-          panelEl.style.maxWidth = "none";
-        } else {
-          if (panelEl.style.position !== "fixed") panelEl.style.position = "fixed";
-          if (panelEl.style.margin !== "0") panelEl.style.margin = "0";
-          panelEl.style.left = box.x + "px";
-          panelEl.style.top = box.y + "px";
-          if (panelEl.style.width !== "") panelEl.style.width = "";
-          if (panelEl.style.height !== "") panelEl.style.height = "";
-          if (panelEl.style.maxWidth !== "") panelEl.style.maxWidth = "";
-        }
-      }
-
-      // ---- 抓手的纵向位置跟着标题行走
-      // 标题栏控件的纵向位置由官方 header 的 flex 排版决定，不在这里写 top。
-      // computeTitleBarTop 里要取三次 getBoundingClientRect（又是一次强制同步布局），
-      // 落位那一帧跳过它：抓手的高度与 top 早就是 54px / 0，没必要每帧重算。
-      if (gripEl !== null) {
-        if (skipMeasure !== true) {
-          const barTop = computeTitleBarTop();
-          const wanted = barTop + "px";
-          if (gripEl.dataset.barTop !== wanted) gripEl.dataset.barTop = wanted;
-        }
-        if (gripEl.style.height !== "54px") gripEl.style.height = "54px";
-        if (gripEl.style.top !== "0px") gripEl.style.top = "0px";
+        if (panelEl.style.position !== "fixed") panelEl.style.position = "fixed";
+        if (panelEl.style.margin !== "0") panelEl.style.margin = "0";
+        panelEl.style.left = box.x + "px";
+        panelEl.style.top = box.y + "px";
+        if (panelEl.style.width !== "") panelEl.style.width = "";
+        if (panelEl.style.height !== "") panelEl.style.height = "";
+        if (panelEl.style.maxWidth !== "") panelEl.style.maxWidth = "";
       }
 
       // ---- 诊断
       if (diag !== null) {
         diag.window = {
           mode: mode,
-          minimized: minimized === true,
           x: box === null ? null : box.x,
           y: box === null ? null : box.y,
           w: box === null ? naturalWidth : box.w,
@@ -484,62 +318,18 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // ------------------------------------------------------------- 三个动作
+    // ------------------------------------------------------------- 关闭
     /**
-     * 关闭：现在完全交给官方 header 里那个 × 图标按钮。
+     * 关闭：完全交给官方 header 里那个 × 图标按钮。
      *
      * 这里留一段说明，记着为什么关闭必须复用官方按钮：
      * 官方设置弹窗的关闭处理器只挂在两处（见 dsh-client-ui-settings-general 的
      * SettingsPanel）——遮罩 div.mask[aria-hidden="true"] 的 onClick，以及 header 里
      * 那个 button.close。overlay 本身没有任何 React 处理器，往 overlay 上派发 click
-     * 是打空的，这正是旧版「点红灯后页面残留一层黑色遮罩」的原因：面板被
-     * visibility:hidden 藏掉了，但 overlay + mask 还在，于是整页被蒙上一层黑。
+     * 是打空的，这正是旧版「面板被藏掉、页面残留一层黑色遮罩」的原因。
      *
-      * 关闭由用户直接点官方 ×，走宿主自己的路径，面板和遮罩会一起清理。
+     * 关闭由用户直接点官方 ×，走宿主自己的路径，面板和遮罩会一起清理。
      */
-
-    function setMinimized(next) {
-      const want = next === true;
-      // 「点标题条还原」关掉时不允许最小化，避免窗口收起后无法回来。
-      if (want && !featureOn("restore")) return;
-      if (minimized === want) return;
-      minimized = want;
-      saveState();
-      applyWindow();
-      if (panelEl !== null && panelEl.getAttribute("data-shortcut-modal") === "settings") {
-        // 最小化时把焦点还给页面，避免键盘事件继续打给「被藏起来」的面板
-        if (want && panelEl.contains(document.activeElement)) {
-          try {
-            document.activeElement.blur();
-          } catch (err) {
-            // 忽略：焦点状态不影响功能
-          }
-        }
-        // 还原后让面板重新拿到焦点，Esc 才能继续生效
-        if (!want) {
-          try {
-            panelEl.focus({ preventScroll: true });
-          } catch (err) {
-            // 忽略
-          }
-        }
-      }
-    }
-
-    function toggleMax() {
-      // 「最大化铺满会话区」关掉时最大化动作整体失效
-      if (!featureOn("maximize")) return;
-      if (minimized === true) {
-        setMinimized(false);
-        mode = MODE_MAX;
-        saveState();
-        applyWindow();
-        return;
-      }
-      mode = mode === MODE_MAX ? (posX === 0 && posY === 0 ? MODE_NORMAL : MODE_DRAGGED) : MODE_MAX;
-      saveState();
-      applyWindow();
-    }
 
     // ------------------------------------------------------------------ 拖动
     function flushDrag() {
@@ -624,10 +414,7 @@ window.__ModuleLoader__.load({
      * 拖动期图层提示的开关。
      *
      * 只加 will-change:transform，**不改任何视觉属性**：
-     * 这里保持窗口材质不变，拖动只使用合成提示，面板
-     * 在起手瞬间从「磨砂」变「清晰」（看上去就是背景透明度变了），松手又变回去
-     * （看上去就是闪一下）。宁可让合成器老老实实每帧重采样，也不让材质在
-     * 拖动前后出现任何跳变。
+     * 面板材质完全沿用宿主提供的普通样式，拖动前后不会有任何视觉跳变。
      */
 
     /** 拖动期标记的开关：置上时只加 will-change:transform，不摘任何材质。 */
@@ -642,7 +429,6 @@ window.__ModuleLoader__.load({
     function onDragPointerDown(event) {
       if (event.button !== 0) return;
       if (panelEl === null) return;
-      if (minimized === true) return;
       // 任意位置拖动：按在交互元素上时不接管（否则点按钮会变成拖窗口）。
       if (event.target instanceof Element && isInteractive(event.target)) return;
       // 这里刻意不 preventDefault：面板里还有导航、输入框、可选中文字，
@@ -656,8 +442,7 @@ window.__ModuleLoader__.load({
       const rect = roundRect(panelEl.getBoundingClientRect());
       // 顺手把这次量到的尺寸记成「自然尺寸」，松手落位那一帧直接用它，
       // 就不必再 getComputedStyle 一次（那是强制同步布局）。
-      // 只在 normal/dragged 下记：最大化与最小化量到的不是自然尺寸，记了会污染后续落位。
-      if (mode !== MODE_MAX && minimized !== true) lastNatural = { w: rect.w, h: rect.h };
+      lastNatural = { w: rect.w, h: rect.h };
       const p = mode === MODE_DRAGGED ? { x: posX, y: posY } : rect;
       drag = {
         x0: event.clientX,
@@ -714,7 +499,7 @@ window.__ModuleLoader__.load({
       const paintedY = live !== null && typeof live.lastY === "number" ? live.lastY : null;
       try {
         // 捕获挂在面板上：鼠标滑出面板范围甚至滑出窗口也继续跟手
-        const target = panelEl !== null ? panelEl : gripEl;
+        const target = panelEl;
         if (target !== null && target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
       } catch (err) {
         // 忽略
@@ -736,7 +521,7 @@ window.__ModuleLoader__.load({
       }
       // 顺序很关键：先把 transform 清掉再写 left/top 会闪一帧；
       // 这里反过来——先落 left/top，再在同一任务里清 transform。
-      if (mode !== MODE_MAX) mode = MODE_DRAGGED;
+      if (mode !== MODE_DRAGGED) mode = MODE_DRAGGED;
       // skipMeasure：位置马上要变成新的 left/top，这一帧别再插一次强制同步布局，
       // 用拖动开始时量到的尺寸（拖动过程不改面板尺寸，这个值是准的）。
       applyWindow(true);
@@ -755,17 +540,9 @@ window.__ModuleLoader__.load({
       // 它跑起来会去摘一个已不存在的标记。
       cancelSettle();
       releasePanelDrag();
-      if (gripEl !== null) {
-        gripEl.removeEventListener("pointerup", onGripPointerUpRestore);
-        gripEl.removeEventListener("dblclick", onGripDblClick);
-        gripEl.remove();
-        gripEl = null;
-      }
       if (panelEl !== null) {
         panelEl.removeAttribute(ATTR_WIN);
         panelEl.removeAttribute(ATTR_DRAGGING);
-        panelEl.removeAttribute("data-dsh-rail-win-min");
-        panelEl.removeAttribute("data-dsh-rail-win-max");
         // 注意：不能摘 data-shortcut-modal —— 那是官方自己的标记，
         // 摘掉之后 tick() 里的 querySelector(PANEL_SEL) 就再也找不到这个面板，
         // 模块会误判成「面板已关闭」而永久退出接管。
@@ -775,10 +552,6 @@ window.__ModuleLoader__.load({
           }
           if ((panelEl.getAttribute("style") || "").trim().length === 0) panelEl.removeAttribute("style");
         }
-      }
-      if (toggleEl !== null) {
-        toggleEl.remove();
-        toggleEl = null;
       }
       if (document.body.classList.contains("dsr-win-dragging")) document.body.classList.remove("dsr-win-dragging");
       panelEl = null;
@@ -837,7 +610,6 @@ window.__ModuleLoader__.load({
       // 标题栏只需打标，样式表据此保持在拖动抓手之上
       if (headerEl !== null) headerEl.setAttribute(ATTR_HEADER, "1");
 
-      ensureGrip();
       ensurePanelDrag();
       applyWindow();
     }
@@ -865,7 +637,7 @@ window.__ModuleLoader__.load({
       if (panel === null) {
         if (panelEl !== null) cleanupPanel();
         lastAdoptNote = "no-panel";
-        if (diag !== null) diag.window = { mode: mode, minimized: minimized === true, open: false, reason: lastAdoptNote };
+        if (diag !== null) diag.window = { mode: mode, open: false, reason: lastAdoptNote };
         return;
       }
       if (panel !== panelEl || !panel.isConnected) {
@@ -877,7 +649,7 @@ window.__ModuleLoader__.load({
           if (api !== null && typeof api.pushError === "function") api.pushError("window: adopt 失败 " + String(err && err.message ? err.message : err));
         }
         if (panelEl === null) {
-          if (diag !== null) diag.window = { mode: mode, minimized: minimized === true, open: true, reason: lastAdoptNote };
+          if (diag !== null) diag.window = { mode: mode, open: true, reason: lastAdoptNote };
           return;
         }
         lastAdoptNote = "";
@@ -993,7 +765,6 @@ window.__ModuleLoader__.load({
     function install(next) {
       api = next;
       diag = api.diag;
-      el = api.el;
       loadState();
       installStyles();
       // 上一次挂载（宿主的 HMR 重新执行 bundle）留下的 DOM 由这里收走，
@@ -1013,7 +784,7 @@ window.__ModuleLoader__.load({
     /**
      * 开关变化时就地收敛，而不是等下一次重开设置窗口。
      *
-     * 为什么必须现在做：这几个开关都挂在「设置窗口本身」上，用户刚在窗口里
+     * 为什么必须现在做：开关都挂在「设置窗口本身」上，用户刚在窗口里
      * 开关保存后立即同步到已加载模块，避免用户误以为没有生效。
      * 每条都只做必要的复位，不重建整个面板。
      */
@@ -1023,8 +794,7 @@ window.__ModuleLoader__.load({
       // DOM 不用重建；正在拖的时候关掉要顺手把这次拖动收干净。
       if (drag !== null) {
         try {
-          const target = panelEl !== null ? panelEl : gripEl;
-          if (target !== null) target.releasePointerCapture(drag.pointerId);
+          if (panelEl.hasPointerCapture(drag.pointerId)) panelEl.releasePointerCapture(drag.pointerId);
         } catch (err) {
           // 忽略：没有捕获或已释放
         }
@@ -1032,16 +802,6 @@ window.__ModuleLoader__.load({
         clearDragTransform();
       }
       ensurePanelDrag();
-      // 还原：关掉时不能停在最小化状态，否则窗口就卡在一条里出不来了
-      if (!featureOn("restore") && minimized === true) {
-        setMinimized(false);
-      }
-      // 最大化：关掉时若正铺满，退回原来的摆放
-      if (!featureOn("maximize") && mode === MODE_MAX) {
-        mode = posX === 0 && posY === 0 ? MODE_NORMAL : MODE_DRAGGED;
-        saveState();
-        applyWindow();
-      }
     }
 
     exports.install = install;
@@ -1049,7 +809,7 @@ window.__ModuleLoader__.load({
     exports.onFeaturesChanged = onFeaturesChanged;
     /** 供内核诊断读：当前窗口状态快照 */
     exports.state = function () {
-      return { mode: mode, minimized: minimized === true, x: posX, y: posY, attached: panelEl !== null };
+      return { mode: mode, x: posX, y: posY, attached: panelEl !== null };
     };
     return module.exports;
   },

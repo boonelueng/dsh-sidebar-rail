@@ -135,7 +135,7 @@ async function main() {
     const freePoint = () => evalJs(`(() => {
       const p = window.__HARNESS__.panel();
       if (!p) return { x: 0, y: 0 };
-      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"],[data-dsh-rail-win-lights],[data-dsh-rail-win-close]';
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"]';
       const r = p.getBoundingClientRect();
       for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
         for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
@@ -183,7 +183,7 @@ async function main() {
       return ok;
     };
     const stored = () => evalJs("window.__HARNESS__.storedFeatures()");
-    // 按一下红绿灯上的某个圆点：模块用 pointerdown 触发，这里照真实路径发同一个事件
+    // 按一下窗口上的某个控制点：模块用 pointerdown 触发，这里照真实路径发同一个事件
     const pressDot = async (sel) => {
       const ok = await evalJs(`(() => {
         const l = window.__HARNESS__.lights();
@@ -212,7 +212,7 @@ async function main() {
         min: dot('.dsr-light-min'),
         max: dot('.dsr-light-max'),
         dotCount: lights ? lights.querySelectorAll('.dsr-light').length : 0,
-        // 官方 × 的换皮状态：关掉红绿灯开关时它必须退回原生外观，
+        // 官方 × 的换皮状态：功能移除后它必须始终是原生外观，
         // 否则会出现「两个圆点没了、× 还是红点」的半残状态。
         closeDot: (() => {
           const b = p && p.querySelector('[data-dsh-rail-win-header] > button[class*="close" i]');
@@ -238,12 +238,12 @@ async function main() {
     check("设置页能挂上「侧边栏条目」这一节", mount1 && mount1.ok === true, mount1);
 
     const r1 = await rows();
-    check("功能开关渲染出三行", Array.isArray(r1) && r1.length === 3, r1 && r1.length);
+    check("功能开关只渲染出一行", Array.isArray(r1) && r1.length === 1, r1 && r1.length);
     const keys = Array.isArray(r1) ? r1.map((r) => r.key) : [];
-    check("三行开关的 key 与预期一致",
-      JSON.stringify(keys) === JSON.stringify(["drag", "restore", "maximize"]), keys);
-    check("三行开关默认全开",
-      Array.isArray(r1) && r1.length === 3 && r1.every((r) => r.on === true && r.checked === true),
+    check("唯一开关的 key 是 drag（其余功能已删除）",
+      JSON.stringify(keys) === JSON.stringify(["drag"]), keys);
+    check("开关默认全开",
+      Array.isArray(r1) && r1.length === 1 && r1.every((r) => r.on === true && r.checked === true),
       r1 && r1.map((r) => ({ key: r.key, on: r.on, checked: r.checked })));
     check("每行都有名称与说明",
       Array.isArray(r1) && r1.every((r) => String(r.label).length > 0 && String(r.desc).length > 0),
@@ -263,7 +263,7 @@ async function main() {
       };
     })()`);
     check("开关有轨道与圆点，role=switch 且可聚焦",
-      sw && sw.rows === 3 && sw.track && sw.knob && sw.role === "switch" && sw.tabindex === "0" && sw.onAttr === "1", sw);
+      sw && sw.rows === 1 && sw.track && sw.knob && sw.role === "switch" && sw.tabindex === "0" && sw.onAttr === "1", sw);
 
     const order = await evalJs(`(() => {
       const wrap = document.querySelector('.dsr-settings');
@@ -275,94 +275,13 @@ async function main() {
       order.indexOf("dsr-switches") < order.indexOf("dsr-body"), order);
     await shot("shot-features-open.png");
 
-    // ------------------------------------------------- 2. 保持普通设置窗口：红绿灯功能已移除
-    check("设置窗口不再渲染红绿灯", await evalJs("window.__HARNESS__.lights() === null"));
+    // ------------------------------------------------- 2. 保持普通设置窗口：窗口控制圆点功能已移除
+    check("设置窗口不再渲染窗口控制圆点", await evalJs("window.__HARNESS__.lights() === null"));
     check("官方关闭按钮保持原生外观", await evalJs("(() => { const p = window.__HARNESS__.panel(); const b = p && p.querySelector('[data-dsh-rail-win-header] > button[class*=close i]'); return !!(b && !b.hasAttribute('data-dsh-rail-win-close')); })()"));
 
-    /*
-    await clickFeature("lights");
-    const p2 = await panelBox();
-    check("关掉红绿灯后整组按钮消失", p2 && p2.hasLights === false, p2 && { hasLights: p2.hasLights });
-    // 官方 × 的那颗红点属于这一组，必须一起退回原生外观：
-    // 换皮标记摘掉，盒子回到官方原来的 28px。
-    check("关掉红绿灯后官方 × 也退回原生外观",
-      p2 && p2.closeDot !== null && p2.closeDot.attr === null && p2.closeDot.w === 28,
-      p2 && p2.closeDot && { attr: p2.closeDot.attr, w: p2.closeDot.w });
-    const s2 = await stored();
-    check("红绿灯状态写进本机存储", s2 && s2.lights === false, s2);
-    const r2 = await rows();
-    const rowLights = Array.isArray(r2) ? r2.find((r) => r.key === "lights") : null;
-    check("开关自身显示为关闭",
-      rowLights && rowLights.on === false && rowLights.checked === false, rowLights);
-    await shot("shot-features-lights-off.png");
 
-    await clickFeature("lights");
-    const p3 = await panelBox();
-    check("重新打开红绿灯后圆点回来（黄 + 绿两个）",
-      p3 && p3.hasLights === true && p3.dotCount === 2 && p3.min !== null && p3.max !== null,
-      p3 && { hasLights: p3.hasLights, dotCount: p3.dotCount });
-    check("圆点里没有红点（关闭交给官方 ×）", p3 && p3.close === null, p3 && { close: p3.close });
-    check("重新打开红绿灯后官方 × 又变回红圆点",
-      p3 && p3.closeDot !== null && p3.closeDot.attr === "1" && p3.closeDot.w === 12,
-      p3 && p3.closeDot && { attr: p3.closeDot.attr, w: p3.closeDot.w });
-
-    // 键盘也能切：Enter 等价点一下
-    const kb = await evalJs(`(() => {
-      const row = document.querySelector('.dsr-switch[data-feature="lights"]');
-      if (!row) return null;
-      const before = row.getAttribute('data-on');
-      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-      const next = document.querySelector('.dsr-switch[data-feature="lights"]');
-      return { before: before, after: next && next.getAttribute('data-on') };
-    })()`);
-    check("键盘 Enter 也能切换开关", kb && kb.before === "1" && kb.after === "0", kb);
-    await clickFeature("lights");
-
-    */
-    if (false) {
-    // ------------------------------------------------- 3. 关掉「点标题条还原」
-    await clickFeature("restore");
-    const p4 = await panelBox();
-    check("关掉还原后黄点被禁用",
-      p4 && p4.min && p4.min.disabled === true && p4.min.ariaDisabled === "true", p4 && p4.min);
-    check("黄点提示写明需先开启还原",
-      p4 && p4.min && String(p4.min.title).indexOf("需先开启") >= 0, p4 && p4.min && p4.min.title);
-
-    const beforeMin = p4 && p4.minAttr;
-    await pressDot(".dsr-light-min");
-    const p4b = await panelBox();
-    check("还原关着时点黄点不会最小化（避免单向门）",
-      p4b && (p4b.minAttr === null || p4b.minAttr === beforeMin),
-      { before: beforeMin, after: p4b && p4b.minAttr });
-
-    await clickFeature("restore");
-    const p5 = await panelBox();
-    check("重新打开还原后黄点恢复可用",
-      p5 && p5.min && p5.min.disabled === false && p5.min.ariaDisabled === null, p5 && p5.min);
-
-    // ------------------------------------------------- 4. 关掉「最大化铺满会话区」
-    await clickFeature("maximize");
-    const p6 = await panelBox();
-    check("关掉最大化后绿点被禁用",
-      p6 && p6.max && p6.max.disabled === true && p6.max.ariaDisabled === "true", p6 && p6.max);
-    check("绿点提示写明已在设置里关闭",
-      p6 && p6.max && String(p6.max.title).indexOf("关闭") >= 0, p6 && p6.max && p6.max.title);
-
-    await pressDot(".dsr-light-max");
-    const p6b = await panelBox();
-    check("关掉最大化后点绿点不会铺满",
-      p6b && p6b.maxAttr !== "1", p6b && { maxAttr: p6b.maxAttr });
-
-    await clickFeature("maximize");
-    const p7 = await panelBox();
-    check("重新打开最大化后绿点恢复可用",
-      p7 && p7.max && p7.max.disabled === false && p7.max.ariaDisabled === null, p7 && p7.max);
-
-    }
-
-    // ------------------------------------------------- 5. 关掉「拖动面板移动窗口」
-    // 拖动入口已经提升到整块面板（任意位置都能拖），所以这里也从面板正文起拖，
-    // 不再依赖抓手——抓手现在只负责「最小化后点一下还原」与双击。
+    // ------------------------------------------------- 3. 关掉「拖动面板移动窗口」
+    // 拖动入口已经提升到整块面板（任意位置都能拖），所以这里也从面板正文起拖。
     await clickFeature("drag");
     const g1 = await panelBox();
     const g1Point = await freePoint();
@@ -388,13 +307,12 @@ async function main() {
       { before: g3.panel, after: g4.panel, from: g3Point });
     await shot("shot-features-dragged.png");
 
-    // ------------------------------------------------- 6. 刷新后状态保持
-    // 先把状态摆成「两开两关」，刷新后应当原样恢复
-    await clickFeature("restore");
-    await clickFeature("maximize");
+    // ------------------------------------------------- 4. 刷新后状态保持
+    // 先把拖动关掉，刷新后应当原样恢复
+    await clickFeature("drag");
     const mixed = await stored();
-    check("三项状态都已写进本机存储",
-      mixed && mixed.drag === true && mixed.restore === false && mixed.maximize === false && !Object.prototype.hasOwnProperty.call(mixed, "lights"), mixed);
+    check("关闭状态已写进本机存储",
+      mixed && mixed.drag === false && Object.keys(mixed).length === 1, mixed);
 
     await boot("reload");
     await openSettings();
@@ -405,21 +323,20 @@ async function main() {
     const byKey = {};
     (Array.isArray(r3) ? r3 : []).forEach((r) => { byKey[r.key] = r.on; });
     check("刷新后开关状态从本机恢复",
-      Array.isArray(r3) && r3.length === 3 &&
-      byKey.drag === true && byKey.restore === false && byKey.maximize === false && !Object.prototype.hasOwnProperty.call(byKey, "lights"), byKey);
+      Array.isArray(r3) && r3.length === 1 && byKey.drag === false, byKey);
 
     const p8 = await panelBox();
-    check("刷新后仍不渲染红绿灯",
+    check("刷新后仍不渲染窗口控制圆点",
       p8 && p8.hasLights === false,
       p8 && { hasLights: p8.hasLights, min: p8.min, max: p8.max });
 
-    // ------------------------------------------------- 7. 诊断无异常
+    // ------------------------------------------------- 5. 诊断无异常
     const errs = await evalJs("(window.__DSH_RAIL__ && window.__DSH_RAIL__.errors) || []");
     const winErrs = Array.isArray(errs) ? errs.filter((e) => String(e).indexOf("window:") === 0) : [];
     check("全程没有 window 模块报错", winErrs.length === 0, winErrs);
     const feat = await evalJs("(window.__DSH_RAIL__ && window.__DSH_RAIL__.features) || null");
-    check("诊断快照里有三项开关状态",
-      feat && typeof feat === "object" && Object.keys(feat).length === 3 && !Object.prototype.hasOwnProperty.call(feat, "lights"), feat);
+    check("诊断快照里只有一项开关状态",
+      feat && typeof feat === "object" && Object.keys(feat).length === 1 && Object.prototype.hasOwnProperty.call(feat, "drag"), feat);
     await shot("shot-features-final.png");
 
     result.steps.done = true;
