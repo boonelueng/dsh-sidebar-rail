@@ -49,6 +49,24 @@
   .stNavCell[data-active="true"] { background: #ececec; }
   .stOptions { grid-area: stOptions; min-width: 0; min-height: 0; padding: 0 24px 24px;
                overflow-y: auto; }
+
+  /* ---- 老版（0.2.1 及更早）设置弹窗骨架：flex 布局，完全没有 grid-area ----
+     这一段是跨版本回归的关键：插件原来只认 grid-area，遇到这套结构会直接放弃接管。
+     真实旧版里 nav 与 content 左右并排，header 挂在 content 内部（不是面板直系子），
+     标题文字是 nav 里的 div.navTitle，且官方在它身上挂 data-modal-autofocus。 */
+  .stLegacyPanel { z-index: 1; width: 800px; height: min(800px, calc(100vh - 48px));
+                   border-radius: 12px; background: #fff; max-width: calc(100vw - 48px);
+                   box-shadow: 0 12px 40px rgba(0,0,0,.18);
+                   display: flex; position: relative; overflow: hidden; }
+  .stLegacyNav { width: 188px; flex: none; padding: 0 8px 8px; display: flex;
+                 flex-direction: column; }
+  .stLegacyNavTitle { padding: 22px 12px 8px 24px; font-size: 16px; font-weight: 500;
+                      line-height: 24px; }
+  .stLegacyContent { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .stLegacyHeader { justify-content: space-between; align-items: flex-start;
+                    gap: 8px; height: 54px; padding: 20px 14px 8px 10px; display: flex;
+                    box-sizing: border-box; }
+  .stLegacyOptions { min-width: 0; min-height: 0; padding: 0 24px 24px; overflow-y: auto; }
 </style>
 </head>
 <body>
@@ -278,9 +296,13 @@
       navBox: function () { return document.querySelector('[data-dsh-rail-part="nav"]'); },
       regionBox: function () { return document.querySelector('[data-dsh-rail-part="region"]'); },
 
-      /* ---- 设置弹窗骨架：open / close 模拟 DSH 的 React 挂载与卸载 ---- */
-      openSettings: function () {
+      /* ---- 设置弹窗骨架：open / close 模拟 DSH 的 React 挂载与卸载 ----
+         layout 参数选版本形态：
+           "grid"   （默认，0.2.2-alpha.2 起）grid-area 定位
+           "legacy"（0.2.1 及更早）flex 布局，无 grid-area，标题在 nav 里 */
+      openSettings: function (layout) {
         if (document.querySelector('[data-shortcut-modal="settings"]')) return true;
+        var legacy = layout === "legacy";
         var overlay = document.createElement("div");
         overlay.className = "stOverlay";
         overlay.setAttribute("role", "presentation");
@@ -288,22 +310,35 @@
         mask.className = "stMask";
         mask.setAttribute("aria-hidden", "true");
         var panel = document.createElement("div");
-        panel.className = "stPanel";
+        panel.className = legacy ? "stLegacyPanel" : "stPanel";
         panel.setAttribute("tabindex", "-1");
         panel.setAttribute("data-shortcut-modal", "settings");
         panel.setAttribute("role", "dialog");
         panel.setAttribute("aria-modal", "true");
-        panel.innerHTML =
-          '<div class="stNavTitle" tabindex="-1" data-modal-autofocus>设置</div>' +
-          '<div class="stHeader"><div class="stActions"></div>' +
-          '<button class="stClose" type="button" aria-label="关闭"><svg width="14" height="14">' +
-          '<path d="M2 2l10 10M12 2L2 12" stroke="currentColor"/></svg>' +
-          '<span class="hiddenLabel">关闭</span></button></div>' +
-          '<nav class="stNav"><div class="stNavList">' +
-          '<button class="stNavCell" type="button" data-active="true">通用</button>' +
-          '<button class="stNavCell" type="button">侧边栏条目</button>' +
-          '</div></nav>' +
-          '<div class="stOptions"><p>设置内容区</p></div>';
+        panel.innerHTML = legacy
+          ? '<nav class="stLegacyNav">' +
+            '<div class="stLegacyNavTitle" tabindex="-1" data-modal-autofocus>设置</div>' +
+            '<div class="stNavList">' +
+            '<button class="stNavCell" type="button" data-active="true">通用</button>' +
+            '<button class="stNavCell" type="button">侧边栏条目</button>' +
+            '</div></nav>' +
+            '<div class="stLegacyContent">' +
+            '<div class="stLegacyHeader"><div class="stActions"></div>' +
+            '<button class="stClose" type="button" aria-label="关闭"><svg width="14" height="14">' +
+            '<path d="M2 2l10 10M12 2L2 12" stroke="currentColor"/></svg>' +
+            '<span class="hiddenLabel">关闭</span></button></div>' +
+            '<div class="stLegacyOptions"><p>设置内容区</p></div>' +
+            '</div>'
+          : '<div class="stNavTitle" tabindex="-1" data-modal-autofocus>设置</div>' +
+            '<div class="stHeader"><div class="stActions"></div>' +
+            '<button class="stClose" type="button" aria-label="关闭"><svg width="14" height="14">' +
+            '<path d="M2 2l10 10M12 2L2 12" stroke="currentColor"/></svg>' +
+            '<span class="hiddenLabel">关闭</span></button></div>' +
+            '<nav class="stNav"><div class="stNavList">' +
+            '<button class="stNavCell" type="button" data-active="true">通用</button>' +
+            '<button class="stNavCell" type="button">侧边栏条目</button>' +
+            '</div></nav>' +
+            '<div class="stOptions"><p>设置内容区</p></div>';
         overlay.appendChild(mask);
         overlay.appendChild(panel);
         document.body.appendChild(overlay);

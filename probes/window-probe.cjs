@@ -142,8 +142,8 @@ async function main() {
       await sleep(500);
     };
 
-    const openSettings = async () => {
-      await evalJs("window.__HARNESS__.openSettings()");
+    const openSettings = async (layout) => {
+      await evalJs("window.__HARNESS__.openSettings(" + JSON.stringify(layout || "grid") + ")");
       await sleep(420);
     };
     const panelBox = () => evalJs(`(() => {
@@ -548,6 +548,53 @@ async function main() {
     await sleep(200);
     result.steps.diag = await evalJs("({ errors: (window.__DSH_RAIL__ && window.__DSH_RAIL__.errors) || [] })");
     check("全程没有 diag 错误", (result.steps.diag.errors || []).filter((e) => String(e).indexOf("window:") === 0).length === 0, result.steps.diag.errors);
+
+    // ------------------------------- 7b. 跨版本兜底：老版 flex 布局设置弹窗
+    // 0.2.1 及更早的宿主把设置面板排成 flex，没有任何 grid-area；
+    // 插件原来只认 grid-area，那种版本上会直接放弃接管（拖动完全失效）。
+    // 这一段就专门回到「无 grid-area」的结构，确认二级探测能接住它。
+    await evalJs("window.__HARNESS__.closeSettings()");
+    await sleep(200);
+    await openSettings("legacy");
+    result.steps.legacy = await panelBox();
+    const lg = result.steps.legacy;
+    check("老版 flex 布局：仍然接管成功（打了 win 标记）", lg.attr === "1", lg.attr);
+    check("老版 flex 布局：找到标题区并打了标", lg.title !== null, lg.title);
+    check("老版 flex 布局：找到按钮行（close 所在那一行）", lg.header !== null && lg.closeBtn !== null,
+      { header: lg.header, closeBtn: lg.closeBtn });
+    const lgCompat = await evalJs("(window.__DSH_RAIL__.window || {}).compat || null");
+    check("老版 flex 布局：diag.compat 记下了兜底路径",
+      lgCompat !== null && lgCompat.titleBy !== "grid-area" && Array.isArray(lgCompat.fallbacks) && lgCompat.fallbacks.length > 0,
+      lgCompat);
+    // 老版也要真能拖：这是「兼容」二字最实在的判据
+    const lgPoint = await evalJs(`(() => {
+      const p = window.__HARNESS__.panel();
+      if (!p) return null;
+      const bad = 'button,a[href],input,textarea,select,option,label,summary,[contenteditable],[role="button"]';
+      const r = p.getBoundingClientRect();
+      for (let y = Math.round(r.bottom) - 40; y > r.top + 60; y -= 12) {
+        for (let x = Math.round(r.left) + 24; x < r.right - 24; x += 24) {
+          const el = document.elementFromPoint(x, y);
+          if (!el || !p.contains(el) || el.closest(bad)) continue;
+          return { x: x, y: y };
+        }
+      }
+      return null;
+    })()`);
+    if (lgPoint !== null) {
+      const lgBase = lg.panel;
+      await dragBy(lgPoint, 110, 90, 10);
+      result.steps.legacyDragged = await panelBox();
+      const ld = result.steps.legacyDragged;
+      check("老版 flex 布局：拖得动（位移 ≈ 110,90）",
+        ld.panel !== null && Math.abs((ld.panel.x - lgBase.x) - 110) <= 8 && Math.abs((ld.panel.y - lgBase.y) - 90) <= 8,
+        { before: lgBase, after: ld.panel });
+    } else {
+      check("老版 flex 布局：拖得动（位移 ≈ 110,90）", false, "no free point");
+    }
+    await shot("shot-window-legacy.png");
+    await evalJs("window.__HARNESS__.closeSettings()");
+    await sleep(200);
 
     // ------------------------------------------------- 8. 拖动过程无长任务
     // 这里刻意用**真实鼠标输入**（CDP Input.dispatchMouseEvent）来拖，而不是自己

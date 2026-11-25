@@ -222,6 +222,7 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/float-probe.cjs` | 悬浮：进出悬浮态、自动展开/停靠自动收起、抓手出现、`translate3d` 拖动、坐标夹取与落盘、**首次落位即写盘**、**三段无缝衔接（含刷新后与 nav 长高后）**、刷新还原、双击停靠、缩窗口不跑丢、**拖动无长任务** |
 | `probes/window-probe.cjs` | 侧栏「从左侧栏取消固定」已隐藏、更多菜单仍保留；设置窗口普通无模糊材质、官方关闭按钮、任意非交互区域拖动、越界夹紧、标题栏双击不再最大化、关闭清理、真实鼠标拖动性能与帧间隔回归 |
 | `probes/features-probe.cjs` | 单一功能开关（拖动）渲染、持久化、刷新恢复、开关即时生效、无红绿灯与原生关闭按钮、诊断无异常 |
+| `verify-compat.cjs` | 跨版本契约：把插件依赖的 18 条 DSH 契约（槽位锚点 / 折叠属性 / 设置面板属性 / grid-area / flex 兜底 / chunk 加载 / `__DSH_BOOT__.release`）逐条拿到多个 DSH 版本的真实产物上核对 |
 
 `drag-probe.cjs`、`float-probe.cjs`、`window-probe.cjs` 与 `features-probe.cjs` 自带静态回归台（`probes/drag-harness.html` 复刻 DSH 侧边栏与设置弹窗的 DOM 骨架 + 加载真实 `client.js`；`probes/features-harness.html` 在此基础上加了 `react` 桩与 `slots.inject` 留档，好让设置页那一节真能被挂起来），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
 
@@ -234,6 +235,27 @@ node verify-modules.cjs
 ```
 
 用法：`node probes/probe.cjs "<带令牌的页面地址>"`。
+
+### 跨版本兼容回归
+
+插件不按版本号分支，只按「宿主真的提供了什么」行事，所以版本兼容性必须**横着摆一排版本**才看得出来。`verify-compat.cjs` 就是这件事的可执行版本：
+
+```bash
+# 准备解包目录（每个版本一个子目录，含 lib/client.js）
+npm pack @deepseek-ai/dsh-client-ui-sidebar@0.2.1-rc.1
+tar -xzf deepseek-ai-dsh-client-ui-sidebar-0.2.1-rc.1.tgz
+# …同理准备 settings-general / renderer / client-modules / conversation
+
+node verify-compat.cjs --root D:\Obsidian\dsh-compat-tmp
+```
+
+每条契约输出一行版本矩阵（`✓` 成立 / `✗` 不成立 / `·` 未解包跳过），并按性质分三档：
+
+- **OK**：全版本成立，改动插件时不该被打破；
+- **DEGRADE-OK**：某些版本没有，但插件已自动降级（`data-sidebar-drawer`、`grid-area`、`settings.section.icon`、`__DSH_BOOT__.release`）；
+- **BREAK**：非可选契约在某个版本上不成立 —— 退出码 1，表示这里需要新增兜底分支。
+
+判断标准上，`layout.grid-area` 在 `0.2.1` 系列上 `✗` 是**预期**的：那时设置面板还是 flex 布局，插件靠「官方 × 所在那一行」这层结构兜底接住它。这条正是 `window-probe.cjs` 的 `legacy` 变体在浏览器里实测的那条路径。
 
 这些探针需要一个带启动令牌的地址。默认情况下宿主侧 `index.mjs` **什么都不做**；只有以 `DSH_SIDEBAR_RAIL_DEV=1` 启动 DSH 时，它才会：
 
@@ -272,6 +294,64 @@ DSH 的槽渲染器给每个槽套一层 `<div data-slot="<槽名>" style="displ
 2. 给根节点和各部件打 `data-dsh-rail-*` 属性（只写自有属性，不碰 `data-slot`，也不碰别的插件的属性）。
 3. 把面板 `<nav>` 绝对定位成竖轨，会话区按实测量出的边距让位。
 4. 用 `MutationObserver` + `requestAnimationFrame` 持续重测，因为 React 会重挂载，且有若干条件渲染（`topStrip`、新会话按钮、面板列表、toast）会改变子元素顺序 —— 所以网格行号不能硬编码。
+
+## 跨版本兼容
+
+插件最初是对着一个 DSH 版本写的，现在支持 **0.2.0-rc.2 及以上**（`package.json` 的 `engines.dsh` 说了算：`>=0.2.0-rc.2 <0.3.0-0`）。0.2.0 这一档的取舍见下面「各版本上的功能可用面」。
+
+做法是**特性探测，不是版本号分支**。DSH 的版本号在浏览器里未必拿得到（`__DSH_BOOT__.release` 要到 0.2.1 才有），而版本号一旦写进 `if`，下一个小版本就会骗过它。所以插件只问「宿主现在长什么样」。
+
+### 依赖点与各版本的差异
+
+| 依赖点 | 用在 | 0.1.7 | 0.2.0 | 0.2.1 | 0.2.2+ |
+| --- | --- | --- | --- | --- | --- |
+| 四个 `[data-slot="sidebar.*"]` 锚点 | 并列布局的全部定位 | ✓ | ✓ | ✓ | ✓ |
+| `[data-sidebar-collapsed]` | 折叠态判定 | ✓ | ✓ | ✓ | ✓ |
+| `[data-shortcut-modal="settings"]` | 找到设置弹窗面板 | ✗ | ✗ | ✓ | ✓ |
+| `grid-area` 命名（标题栏/按钮行） | 窗口拖动一级探测 | — | — | ✗ | ✓ |
+| flex 布局（header 在 content 内） | 窗口拖动二级兜底 | — | — | ✓ | ✗ |
+| `settings.section` 槽 | 设置页里的「侧边栏条目」 | ✗ | ✗ | ✓ | ✓ |
+| `settings.section.icon` 槽 | 设置项图标 | ✗ | ✗ | ✗ | ✓ |
+| `__DSH_BOOT__.release.version` | 只进诊断，不作分支 | ✗ | ✗ | ✓ | ✓ |
+
+**0.2.2-alpha.2 是分界线**：在那之前设置面板是 flex 布局（没有任何 `grid-area`），之后改成 CSS grid 命名区。插件原来只认 `grid-area`，所以在 0.2.1 及更早的版本上会直接放弃接管——窗口拖动完全失效，而且是静默的。
+
+### 二级探测怎么工作
+
+`client.window.js` 的 `locateTitleAndHeader(panel)` 按顺序试：
+
+1. **一级**：遍历面板后代读 `getComputedStyle(node).gridArea`，匹配 `/title$/i`、`/header$/i`。这是 0.2.2+ 的路径，最准。
+2. **二级**（一级没命中才走）：
+   - header = `panel.querySelector('button[class*="close" i]').parentElement` —— 「官方 × 所在的那一行」。这个判据从 0.2.1 到 0.2.3 都成立，因为关闭按钮始终在标题栏里。
+   - title 依次试 `[data-modal-autofocus]` → `aria-labelledby` 指向的节点 → `[class*="navTitle" i]`。
+3. 两级都拿不到才记 `no-title` 放弃，面板退回官方原样。
+
+注意 `title` 与 `header` **允许是不同节点**：0.2.1 的标题文字（`div.navTitle`）在左侧导航列里，而按钮行在内容区顶部。插件只把 `header` 用来抬高层级（让按钮点得到），把 `title` 用作拖动抓手与自动聚焦目标，两者分开正好对上两种布局。
+
+走二级时会把路径记进 `__DSH_RAIL__.window.compat`：`{ titleBy: "modal-autofocus", headerBy: "close-row", fallbacks: [...] }`。排查「这个版本上拖动怎么怪怪的」时，先看这三个字段。
+
+### 各版本上的功能可用面
+
+| DSH 版本 | 并列布局 / 条目 / 拖拽 / 悬浮 | 设置页里的条目编辑 | 设置窗口拖动 |
+| --- | --- | --- | --- |
+| 0.2.0 及更早 | ✓ | ✗（没有 `settings.section` 槽） | ✗（没有 `data-shortcut-modal` 面板） |
+| 0.2.1 系列 | ✓ | ✓ | ✓（走二级兜底） |
+| 0.2.2+ | ✓ | ✓ | ✓（走一级 grid-area） |
+
+0.2.0 及更早那两列为 ✗ 不是 bug：那些版本压根没有官方设置弹窗，插件探不到面板就静默退回，不报错也不留痕。
+
+### 诊断
+
+`window.__DSH_RAIL__.compat` 记录这次探测到的能力面，贴一份出来就能定位降级层：
+
+```js
+JSON.stringify(window.__DSH_RAIL__.compat)
+// { dshVersion: "0.2.2-rc.5", slots: true, slotInject: true, slotRegister: true,
+//   requireAsync: true, ctxGet: true, ctxEffect: true,
+//   sidebarCollapsed: "expanded", railColumn: "parentElement", notes: [] }
+```
+
+`notes` 里是「哪一层没长出来」的白话说明；`sidebarCollapsed` 是折叠态实测值（顺带证明那条探测点真的在跑）；`railColumn` 说明几何是量在哪个父节点上的。
 
 ## 已知边界
 

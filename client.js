@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.12",
+      version: "1.0.13",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },
@@ -84,6 +84,20 @@ window.__ModuleLoader__.load({
       floating: false,
       floatPos: null,
       settingsSection: false,
+      // 跨版本兼容：本插件不按版本号分支，只按「宿主真的提供了什么」行事。
+      // 这里记录这次探测到的能力面，出问题时一眼能看出是哪一层降级了。
+      compat: {
+        dshVersion: null,
+        slots: false,
+        slotInject: false,
+        slotRegister: false,
+        requireAsync: false,
+        ctxGet: false,
+        ctxEffect: false,
+        sidebarCollapsed: null,
+        railColumn: null,
+        notes: [],
+      },
       errors: [],
     };
     window.__DSH_RAIL__ = diag;
@@ -369,6 +383,7 @@ window.__ModuleLoader__.load({
         v: diag.viewport ? diag.viewport.w + "x" + diag.viewport.h : "",
         g: diag.geometry || null,
         n: diag.nodes || null,
+        k: diag.compat || null,
       });
     }
 
@@ -403,6 +418,7 @@ window.__ModuleLoader__.load({
           viewport: diag.viewport || null,
           geometry: diag.geometry || null,
           nodes: diag.nodes || null,
+          compat: diag.compat || null,
           styleInjected: document.querySelector('style[data-plugin="' + PLUGIN_ID + '"]') !== null,
         });
       } catch (err) {
@@ -1149,8 +1165,22 @@ window.__ModuleLoader__.load({
     }
 
     function isCollapsed() {
-      if (document.querySelector("[data-sidebar-collapsed]") !== null) return true;
-      if (document.querySelector("[data-sidebar-drawer]") !== null) return true;
+      // 折叠态在 0.1.7 → 0.2.3 都靠 [data-sidebar-collapsed] 表达，稳定。
+      // [data-sidebar-drawer] 在已核对过的所有版本里都不存在（drawer 用别的属性表达），
+      // 保留这行只是给未来版本留个便宜的探测点：真出现了就自动跟着降级。
+      if (document.querySelector("[data-sidebar-collapsed]") !== null) {
+        if (diag.compat.sidebarCollapsed !== "collapsed") {
+          diag.compat.sidebarCollapsed = "collapsed";
+        }
+        return true;
+      }
+      if (document.querySelector("[data-sidebar-drawer]") !== null) {
+        if (diag.compat.sidebarCollapsed !== "drawer") {
+          diag.compat.sidebarCollapsed = "drawer";
+        }
+        return true;
+      }
+      if (diag.compat.sidebarCollapsed !== "expanded") diag.compat.sidebarCollapsed = "expanded";
       return false;
     }
 
@@ -1232,8 +1262,13 @@ window.__ModuleLoader__.load({
 
         // 采集几何，供宿主侧 last-report.json 判断「是否真的并列」
         try {
-          const wsCol = root.closest('[class*="sidebarCol"]') || root.parentElement;
-          const colStyle = wsCol === null ? null : window.getComputedStyle(wsCol);
+          // 历史遗留：曾经猜过宿主用 [class*="sidebarCol"] 包一列，实际 0.1.7 → 0.2.3
+          // 全版本都没有这个类名，永远落空。保留探测（真出现就用它，量得更准），
+          // 但把结果记进 diag.compat.railColumn，别再让它当一个谁也看不见的死分支。
+          const wsCol = root.closest('[class*="sidebarCol"]');
+          const railCol = wsCol !== null ? wsCol : root.parentElement;
+          diag.compat.railColumn = wsCol !== null ? "sidebarCol-class" : "parentElement";
+          const colStyle = railCol === null ? null : window.getComputedStyle(railCol);
           const box = function (node) {
             if (node === null) return null;
             const r = node.getBoundingClientRect();
@@ -1242,7 +1277,7 @@ window.__ModuleLoader__.load({
           diag.viewport = { w: window.innerWidth, h: window.innerHeight };
           diag.geometry = {
             root: box(root),
-            col: box(wsCol),
+            col: box(railCol),
             nav: box(nav),
             region: box(region),
             mount: box(mountEl),
@@ -1387,7 +1422,53 @@ window.__ModuleLoader__.load({
     }
 
     // ------------------------------------------------------------------- apply
+    /**
+     * 跨版本兼容探测。
+     *
+     * 这个插件刻意**不看版本号分支**：DSH 的 DOM 锚点、槽位契约、chunk 加载方式
+     * 在 0.1.7 → 0.2.3 之间大部分是稳定的，真出问题的地方往往是「某个能力在某个
+     * 版本上还没长出来」。所以这里只问三件事：宿主给了什么、我们退到了哪一步。
+     *
+     * 结果全部落到 diag.compat，用户贴一份 window.__DSH_RAIL__ 就能定位降级层。
+     */
+    function probeCompat(ctx) {
+      const c = diag.compat;
+      try {
+        const boot = window.__DSH_BOOT__;
+        if (boot !== null && typeof boot === "object") {
+          const release = boot.release;
+          if (release !== null && typeof release === "object" && typeof release.version === "string") {
+            c.dshVersion = release.version;
+          } else if (typeof boot.version === "string") {
+            // 0.2.0 及更早没有 release 字段，退回看看有没有别处的版本串
+            c.dshVersion = boot.version;
+          }
+        }
+        if (c.dshVersion === null) c.notes.push("boot: no release.version (host <= 0.2.0)");
+      } catch (err) {
+        c.notes.push("boot: " + String(err));
+      }
+      c.slots = ctx.slots !== undefined && ctx.slots !== null;
+      c.slotInject = c.slots && typeof ctx.slots.inject === "function";
+      c.slotRegister = c.slots && typeof ctx.slots.register === "function";
+      c.ctxGet = typeof ctx.get === "function";
+      c.ctxEffect = typeof ctx.effect === "function";
+      try {
+        c.requireAsync = typeof require !== "undefined" && require !== null && typeof require.async === "function";
+      } catch (err) {
+        c.requireAsync = false;
+      }
+      if (!c.slotInject || !c.slotRegister) c.notes.push("slots: inject/register 缺失，设置页入口不可用");
+      if (!c.requireAsync) c.notes.push("require.async 缺失，四个可选模块全部降级");
+      // 设置弹窗能不能接管要等它真的被打开才探得到，结论记在
+      // __DSH_RAIL__.window.reason（no-title / no-panel）与 window.compat 里。
+      if (!c.ctxGet) c.notes.push("ctx.get 缺失，layout / uiWorkspace 动作降级为无效");
+      return c;
+    }
+
     function apply(ctx) {
+      // 先探一次宿主能力面：后面每一步降级都能在 diag.compat 里对上号
+      probeCompat(ctx);
       const getService = function (name) {
         if (typeof ctx.get === "function") {
           try {

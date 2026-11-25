@@ -5,12 +5,13 @@
  *   - 按住面板任意位置都能拖动整个窗口（按钮、输入框等交互元素除外）；
  *   - 关闭 = 官方 header 的原生 × 按钮，行为与外观均由宿主提供。
  *
- * 设计上只用「官方设置弹窗本来就有的 DOM 契约」定位：
+ * 设计上只用「官方设置弹窗本来就有的 DOM 契约」定位，并做两级特性探测：
  *   [data-shortcut-modal="settings"]  → 面板本身（role=dialog）
  *   它的父节点是 overlay，overlay 下的 [aria-hidden="true"] 是遮罩；
- *   面板内的直系后代里带 gridArea=title 的节点是标题栏文字区，
- *   gridArea=header 的是官方放操作按钮的那一行。
- * 选不到任何节点就整体静默退出，绝不去猜别的选择器。
+ *   ① 新版（0.2.2-alpha.2 起，CSS grid）：面板内侧 gridArea=title / header 的格子；
+ *   ② 老版（0.2.1 及更早，flex）：官方 × 按钮所在的那一行当按钮行，
+ *      data-modal-autofocus / aria-labelledby / navTitle 类名找标题文字。
+ * 两级都选不到节点就整体静默退出，绝不去猜更多选择器。
  *
  * 本模块缺席、加载失败或运行期抛错时，设置弹窗保持 DSH 原生样子——
  * 内核用 callModule 守卫，只会把这个功能摘掉，不影响侧边栏与其他模块。
@@ -48,6 +49,7 @@ window.__ModuleLoader__.load({
 
     // ------------------------------------------------------------------- 常量
     const ATTR_WIN = "data-dsh-rail-win";
+    const ATTR_TITLE = "data-dsh-rail-win-title";
     const ATTR_HEADER = "data-dsh-rail-win-header";
     const ATTR_DRAG = "data-dsh-rail-win-drag";
     const ATTR_DRAGGING = "data-dsh-rail-win-dragging";
@@ -108,6 +110,17 @@ window.__ModuleLoader__.load({
     // 少一次强制同步布局 —— 详见 applyWindow 的 skipMeasure 参数。
     let lastNatural = null;
 
+    /**
+     * 跨版本兼容诊断：记录这次接管是用哪条探测路径成功的。
+     * 只要不是主路径（grid-area），就说明跑在老的 flex 布局宿主上，
+     * 排查「某个版本上不工作」时一眼能看出落到了哪一级兜底。
+     */
+    const compat = {
+      titleBy: null,
+      headerBy: null,
+      fallbacks: [],
+    };
+
     // ---------------------------------------------------------------- 持久化
     function loadState() {
       try {
@@ -158,8 +171,11 @@ window.__ModuleLoader__.load({
       "body.dsr-win-dragging{cursor:grabbing!important;user-select:none!important}",
       "body.dsr-win-dragging [data-dsh-rail-win]{cursor:grabbing!important}",
 
-      /* 官方 header 行：只做层级保护，保证按钮不被别的图层盖住。 */
-      "[data-dsh-rail-win] > [data-dsh-rail-win-header]{",
+      /* 官方 header 行：只做层级保护，保证按钮不被别的图层盖住。
+         这里用后代选择器而不是 `>`：0.2.2 之前官方是 flex 布局，
+         header 挂在 content 容器内部，不是面板的直系子节点；
+         0.2.2 起改成 grid，header 才是直系子。后代选择器两代都命中。 */
+      "[data-dsh-rail-win] [data-dsh-rail-win-header]{",
       "position:relative;z-index:2;",
       "}",
 
@@ -312,8 +328,14 @@ window.__ModuleLoader__.load({
           w: box === null ? naturalWidth : box.w,
           h: box === null ? naturalHeight : box.h,
           open: true,
-          // 接管成功时为空串；否则写清卡在哪一步（no-grid / error:...）
+          // 接管成功时为空串；否则写清卡在哪一步（no-title / error:...）
           reason: lastAdoptNote,
+          // 这次是用哪条路径定位的（grid-area 为主；close-row / modal-autofocus 为老版本兜底）
+          compat: {
+            titleBy: compat.titleBy,
+            headerBy: compat.headerBy,
+            fallbacks: compat.fallbacks.slice(),
+          },
         };
       }
     }
@@ -560,12 +582,15 @@ window.__ModuleLoader__.load({
       headerEl = null;
       drag = null;
       lastNatural = null;
+      compat.titleBy = null;
+      compat.headerBy = null;
+      compat.fallbacks = [];
     }
 
     /**
      * 接管失败的现场快照，写进 diag.window.reason —— 用户一眼能看出卡在哪一步：
      *   no-panel        页面里根本没有 [data-shortcut-modal="settings"]
-     *   no-grid         有面板，但没找到 grid-area 以 title 结尾的标题区
+     *   no-title        有面板，但 grid-area 与结构特征两条路径都没找到标题区
      *   error:<detail>  上面某一步抛了异常（例如样式系统还没就绪）
      */
     let lastAdoptNote = "";
@@ -586,32 +611,95 @@ window.__ModuleLoader__.load({
       overlayEl = panel.parentElement;
       if (panel.getAttribute("data-shortcut-modal") !== "settings") panel.setAttribute("data-shortcut-modal", "settings");
 
-      // 找标题区与按钮行：靠 grid-area，而不是靠哈希类名
-      // 官方模板形如 "VOzbGW_title VOzbGW_header"，前缀是构建哈希、每次发版都会变，
-      // 所以按子串认 cell：以 title / header 结尾的那一格就是我们要的。
+      const spot = locateTitleAndHeader(panel);
+      titleEl = spot.title;
+      headerEl = spot.header;
+      compat.titleBy = spot.titleBy;
+      compat.headerBy = spot.headerBy;
+      if (titleEl === null) {
+        // 两条路径都没找到标题区就放弃接管——没有标题栏的窗口拖不动，
+        // 留着只会让用户困惑。原因写进 diag.window.reason 便于真机排查。
+        lastAdoptNote = "no-title";
+        cleanupPanel();
+        return;
+      }
+      titleEl.setAttribute(ATTR_TITLE, "1");
+      // 标题栏只需打标，样式表据此保持在拖动抓手之上
+      if (headerEl !== null) headerEl.setAttribute(ATTR_HEADER, "1");
+
+      ensurePanelDrag();
+      applyWindow();
+    }
+
+    /**
+     * 定位标题区与按钮行 —— 这是本插件唯一真正的跨版本破坏点，所以做两级探测。
+     *
+     * 一级：grid-area。0.2.2-alpha.2 起官方把设置面板改成 CSS grid，
+     *   模板形如 "VOzbGW_title VOzbGW_header"，前缀是构建哈希、每次发版都会变，
+     *   所以只按子串认：以 title / header 结尾的那一格就是我们要的。
+     *
+     * 二级：结构特征。0.2.1 及更早官方是 flex 布局，grid-area 全为空，
+     *   一级必然落空。此时改用「官方 × 按钮所在的那一行」当按钮行，
+     *   用官方自己挂的 data-modal-autofocus / aria-labelledby / navTitle 类名找标题文字。
+     *   这套特征两代都成立（官方 × 一直是 button.close，标题一直是 navTitle）。
+     */
+    function locateTitleAndHeader(panel) {
+      const found = { title: null, header: null, titleBy: null, headerBy: null };
+
+      // ---- 一级：grid-area
       const descendants = panel.querySelectorAll("*");
       for (const node of descendants) {
         if (node.closest(TITLE_SEL) !== null) continue;
         const area = (window.getComputedStyle(node).gridArea || "").trim();
         const cells = area.length === 0 || area === "auto" ? [] : area.split(/\s+/);
         for (const cell of cells) {
-          if (titleEl === null && /title$/i.test(cell)) titleEl = node;
-          else if (headerEl === null && /header$/i.test(cell)) headerEl = node;
+          if (found.title === null && /title$/i.test(cell)) {
+            found.title = node;
+            found.titleBy = "grid-area";
+          } else if (found.header === null && /header$/i.test(cell)) {
+            found.header = node;
+            found.headerBy = "grid-area";
+          }
         }
-        if (titleEl !== null && headerEl !== null) break;
+        if (found.title !== null && found.header !== null) break;
       }
-      if (titleEl === null) {
-        // 找不到标题区就放弃接管——没有标题栏的窗口拖不动，留着只会让用户困惑
-        lastAdoptNote = "no-grid";
-        cleanupPanel();
-        return;
-      }
-      titleEl.setAttribute("data-dsh-rail-win-title", "1");
-      // 标题栏只需打标，样式表据此保持在拖动抓手之上
-      if (headerEl !== null) headerEl.setAttribute(ATTR_HEADER, "1");
 
-      ensurePanelDrag();
-      applyWindow();
+      // ---- 二级：结构特征（flex 布局的老版本）
+      if (found.header === null) {
+        const closeBtn = panel.querySelector('button[class*="close" i]');
+        const row = closeBtn !== null ? closeBtn.parentElement : null;
+        if (row !== null && row !== panel) {
+          found.header = row;
+          found.headerBy = "close-row";
+          compat.fallbacks.push("header:close-row");
+        }
+      }
+      if (found.title === null) {
+        // ① 官方在标题文字上挂 data-modal-autofocus（导航栏当前项也挂，
+        //    但标题永远是文档序第一个，所以取第一个即可）。
+        let node = panel.querySelector("[data-modal-autofocus]");
+        if (node !== null) {
+          found.titleBy = "modal-autofocus";
+        } else {
+          // ② aria-labelledby 指向标题节点的 id
+          const labelled = panel.getAttribute("aria-labelledby");
+          if (labelled !== null && labelled.length > 0) {
+            node = document.getElementById(labelled);
+            if (node !== null && !panel.contains(node)) node = null;
+            if (node !== null) found.titleBy = "aria-labelledby";
+          }
+        }
+        if (node === null) {
+          // ③ 最后兜底：官方类名里的 navTitle（哈希前缀，所以按子串）
+          node = panel.querySelector('[class*="navTitle" i]');
+          if (node !== null) found.titleBy = "navTitle-class";
+        }
+        if (node !== null) {
+          found.title = node;
+          compat.fallbacks.push("title:" + found.titleBy);
+        }
+      }
+      return found;
     }
 
     /**
