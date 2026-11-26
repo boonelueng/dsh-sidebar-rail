@@ -1,4 +1,4 @@
-# 运行时产物，不要提交
+# 杩愯鏃朵骇鐗╋紝涓嶈鎻愪氦
 last-report.json
 launch-url.txt
 probe-result.json
@@ -18,7 +18,8 @@ shot-*.png
 probes/.probe-chrome-*/
 probes/rel*/
 
-# 依赖
+# 渚濊禆
 node_modules/
 
 commit-msg*.txt
+ws-toggle-probe-result.json

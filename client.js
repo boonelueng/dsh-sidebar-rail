@@ -31,6 +31,9 @@ window.__ModuleLoader__.load({
     const STORAGE_FLOAT = "dsh-sidebar-rail.float.v1";
     const STORAGE_FEATURES = "dsh-sidebar-rail.features.v1";
     const ATTR_FLOAT = "data-dsh-rail-float";
+    /** 「一键展开 / 收起工作区」入口。用它自己的属性而不是 ATTR_PART：
+     *  ATTR_PART 会被 clearTags() 在折叠态剥掉，而折叠态恰恰是这个按钮最需要存在的时候。 */
+    const ATTR_WS_TOGGLE = "data-dsh-rail-ws-toggle";
     const SETTINGS_SECTION = "settings.section";
     const SETTINGS_SECTION_ID = "dsh-sidebar-rail.settings";
     /** 轨道（功能区）宽度：收起为窄条，展开为带文字标签的宽条 */
@@ -73,7 +76,7 @@ window.__ModuleLoader__.load({
     /** 诊断对象，挂在 window.__DSH_RAIL__ 供控制台核对 */
     const diag = {
       loaded: true,
-      version: "1.0.13",
+      version: "1.0.14",
       tagged: false,
       disabled: null,
       anchors: { root: false, nav: false, region: false, logo: false, foot: false, newButton: false },
@@ -96,6 +99,8 @@ window.__ModuleLoader__.load({
         ctxEffect: false,
         sidebarCollapsed: null,
         railColumn: null,
+        /** 工作区一键展开/收起走的是哪条路径：service / button / unsupported / ready */
+        wsToggle: null,
         notes: [],
       },
       errors: [],
@@ -555,6 +560,164 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // -------------------------------------------------- workspace expand/toggle
+    /**
+     * 「一键展开 / 一键收起工作区」。
+     *
+     * 它和下面那个 railExpanded 不是一回事：那个只管左侧 40px 窄条要不要显示文字标签（本插件自己的
+     * 形态），这个管的是宿主整个左侧栏要不要在屏幕上（DSH 自己的 sidebar 折叠）。
+     *
+     * 读写分开处理，这是这块唯一需要想清楚的地方：
+     *   **读**只读 DOM —— 有 [data-sidebar-collapsed] 就是收起，没有就是展开。
+     *     宿主没有对外暴露「当前折叠态」的查询接口，而用户在官方按钮、快捷键、窗口变窄这三条路上
+     *     都可能改过状态；自己维护一份内存状态必然对不上。DOM 属性是所有路径的共同落点。
+     *   **写**必须先找到能驱动宿主的入口，因为 React 的 layoutInfo 在插件手里是只读的。
+     *     三级兜底，逐级降级：
+     *       ① layout.toggleSidebar()（服务存在就最干净，宿主自己知道怎么切）
+     *       ② 点宿主自己的折叠按钮
+     *       ③ 都没有 → 返回 false，按钮就地禁用并给出说明，绝不假装成功
+     */
+    function workspaceCollapsed() {
+      // 与 isCollapsed() 共用同一个判据，避免两处对「折叠」的定义漂移。
+      // 注意这里不能用 isCollapsed()：那个还会看 data-sidebar-drawer（窄屏抽屉态），
+      // 而抽屉态下「工作区展开」这件事另有含义，不该被当成折叠。
+      return document.querySelector("[data-sidebar-collapsed]") !== null;
+    }
+
+    /** 找宿主自己的左侧栏折叠按钮。返回 null 表示这个宿主没有可点的入口。 */
+    function findSidebarToggleButton() {
+      // ① 最稳：0.2.2+ 给「打开侧边栏」按钮打了 data-sidebar-opener（在侧栏外，折叠态也能点）
+      const opener = document.querySelector("[data-sidebar-opener]");
+      if (opener !== null) return opener;
+      // ② 0.2.2+ 侧栏内部还有一个 data-sidebar-toggle（展开态时用来收起）
+      const inner = document.querySelector("[data-sidebar-toggle]");
+      if (inner !== null) return inner;
+      // ③ 更老的版本两个属性都没有，只能按无障碍名认。官方文案在 layout/sidebar 包里：
+      //    zh「打开侧边栏」/「收起侧边栏」、en "Open sidebar"/"Collapse sidebar"、ja、es、fr、de、ru、pt 各一套。
+      //    这里不枚举语言，只认「侧边栏 + 开合」这个语义组合，中英日俄都覆盖，其余语言靠 data-* 属性兜。
+      const buttons = document.querySelectorAll("button[aria-label]");
+      for (const btn of buttons) {
+        const label = btn.getAttribute("aria-label") || "";
+        if (/侧边栏|侧栏|sidebar|サイドバー|боковую панель/i.test(label)
+          && /打开|展开|收起|折叠|open|collapse|expand|開く|折りたたむ/i.test(label)) {
+          return btn;
+        }
+      }
+      return null;
+    }
+
+    /**
+     * 切换工作区展开态。返回这次是否真的发出了一个动作。
+     * 返回值决定按钮要不要在「宿主不支持」时禁用自己。
+     */
+    function toggleWorkspace() {
+      // ① 服务优先
+      if (layoutSvc !== null && typeof layoutSvc.toggleSidebar === "function") {
+        try {
+          layoutSvc.toggleSidebar();
+          reportWorkspaceToggle("service");
+          return true;
+        } catch (err) {
+          diag.errors.push("ws-toggle-service: " + String(err));
+        }
+      }
+      // ② 点宿主自己的按钮
+      const btn = findSidebarToggleButton();
+      if (btn !== null) {
+        try {
+          btn.click();
+          reportWorkspaceToggle("button");
+          return true;
+        } catch (err) {
+          diag.errors.push("ws-toggle-button: " + String(err));
+        }
+      }
+      // ③ 都不行：不假装成功
+      diag.compat.wsToggle = "unsupported";
+      return false;
+    }
+
+    function reportWorkspaceToggle(via) {
+      diag.compat.wsToggle = via;
+      scheduleReport();
+    }
+
+    /**
+     * 工作区切换入口 —— 挂在 [data-slot="sidebar.workspaces"] 那个区域里。
+     *
+     * 位置选择的理由：用户点它就是要「把这一块整体展开/收起」，所以它应该紧贴着工作区，
+     * 而不是躲到 40px 窄条的底部自定义条目里。
+     *
+     * 折叠态怎么办：宿主在非 Windows 标题栏平台下并不隐藏 `.regionArea`（只是把整列压到
+     * collapsedWidth），所以这颗按钮通常还留在原地、只是被压窄；此时它必须换成「展开工作区」
+     * 的语义，否则用户没法用同一条路径点回来。sync() 的折叠分支因此也要刷新它 —— 见
+     * refreshWorkspaceToggle()。
+     */
+    let wsToggleEl = null;
+
+    /** 更新已有入口的文案/状态。入口还不存在时什么都不做（折叠态首次进入时就是这样）。 */
+    function refreshWorkspaceToggle() {
+      const node = wsToggleEl;
+      if (node === null) return null;
+      const collapsed = workspaceCollapsed();
+      const canAct = layoutSvc !== null
+        ? typeof layoutSvc.toggleSidebar === "function"
+        : findSidebarToggleButton() !== null;
+      if (node.disabled === canAct) node.disabled = !canAct;
+      node.setAttribute("aria-pressed", collapsed ? "false" : "true");
+      const label = collapsed ? "展开工作区" : "收起工作区";
+      if (node.getAttribute("aria-label") !== label) node.setAttribute("aria-label", label);
+      if (node.title !== label) node.title = label;
+      const icon = collapsed ? "»" : "«";
+      if (node.textContent !== icon) node.textContent = icon;
+      diag.compat.wsToggle = canAct ? (diag.compat.wsToggle || "ready") : "unsupported";
+      return node;
+    }
+
+    /** 彻底摘掉入口（插件被关掉、或整个卸载时）。折叠态下不能走这里 —— 那时还要留着它。 */
+    function removeWorkspaceToggle() {
+      if (wsToggleEl !== null) {
+        wsToggleEl.remove();
+        wsToggleEl = null;
+      }
+      // 兜底扫一遍：极端情况下（比如上一实例清理不完整）DOM 里可能残留一个
+      document.querySelectorAll("[" + ATTR_WS_TOGGLE + "]").forEach(function (node) {
+        node.remove();
+      });
+    }
+
+    function ensureWorkspaceToggle(region) {
+      // 已有且还挂在同一个 region 里：只更新文案与禁用态，不重建（重建会打断点击与焦点）
+      let node = wsToggleEl;
+      if (node !== null && node.parentElement !== region) {
+        node.remove();
+        node = null;
+        wsToggleEl = null;
+      }
+      if (node === null) {
+        node = el("button", { type: "button", className: "dsr-ws-toggle", "data-dsh-rail-ws-toggle": "1" }, null);
+        node.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          const ok = toggleWorkspace();
+          // 点完立即刷新一次：折叠/展开是异步的（宿主下一帧才改 DOM），
+          // 先把按钮语义拨到目标态，避免用户看到一段「还是旧文案」的窗口期。
+          refreshWorkspaceToggle();
+          // 宿主不支持时给一次性反馈，不要让用户以为点了没反应
+          if (!ok) {
+            node.setAttribute("data-dsh-rail-ws-toggle-unsupported", "1");
+            node.title = "此宿主版本不支持自动切换工作区，请用宿主自己的侧边栏按钮";
+          }
+        });
+        // 插到工作区列表前面：视觉上属于「这一块的头」，而不是悬浮在列表某项上。
+        // 用 prepend 而不是 insertBefore(node, firstChild)：语义一样，但对 DOM 桩
+        // （verify-modules.cjs 里的最小实现）也成立——它只实现了 prepend/appendChild。
+        region.prepend(node);
+        wsToggleEl = node;
+      }
+      return refreshWorkspaceToggle();
+    }
+
     // ------------------------------------------------------- rail expand state
     /** 功能区是否展开（显示面板名称）。持久化到本机；写盘失败则本次内存态生效。 */
     let railExpanded = false;
@@ -759,6 +922,23 @@ window.__ModuleLoader__.load({
       ".dsr-toggle{margin-top:4px;border-radius:0;width:36px;height:30px;",
       "border-top:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));font-size:13px}",
       '[data-dsh-rail-root][data-dsh-rail-expanded="1"] .dsr-toggle{width:100%;padding:0 10px}',
+
+      /* 工作区一键展开 / 收起：贴在会话区列表顶部的一整行。
+         用 transform 不动手写死宽高，避免和宿主自己的列表内边距打架；
+         颜色全部走 DSH 主题变量，深浅色模式下都不用另配。 */
+      ".dsr-ws-toggle{",
+      "display:flex;align-items:center;justify-content:center;",
+      "width:100%;height:26px;margin:2px 0 4px;padding:0 8px;",
+      "border:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;",
+      "color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;line-height:1;",
+      "cursor:pointer;flex:none;",
+      "}",
+      ".dsr-ws-toggle:hover{background:var(--dsw-alias-interactive-bg-hover);",
+      "color:var(--dsw-alias-label-primary)}",
+      ".dsr-ws-toggle:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color);",
+      "outline-offset:1px}",
+      /* 宿主不支持时禁用：禁用态不要还留着 hover 反馈，那会让人以为能用 */
+      ".dsr-ws-toggle:disabled{opacity:.4;cursor:default;background:transparent}",
 
       /* ---------------------------------------------------------------- 悬浮态
        * 整条轨道脱离侧边栏，固定在视口任意位置。
@@ -1126,6 +1306,10 @@ window.__ModuleLoader__.load({
     }
 
     function clearTags() {
+      // 工作区切换入口故意不在这里摘除：它挂在 region 里，而 region 在折叠态被宿主整块隐藏，
+      // 留着既看不见也不会碍事；反过来，若在这里 remove，展开回来时还要重建一次，
+      // 反而多一次布局抖动。真正需要它消失的情况（锚点彻底没了）由 ensureWorkspaceToggle
+      // 自己的 parentElement 检查兜底。
       document.querySelectorAll("[" + ATTR_ROOT + "]").forEach(function (node) {
         node.removeAttribute(ATTR_ROOT);
         node.removeAttribute(ATTR_NAV);
@@ -1188,11 +1372,23 @@ window.__ModuleLoader__.load({
       try {
         if (isDisabledBySwitch()) {
           diag.disabled = "switch";
+          // 整个插件被关掉时入口也该走：留一个「只有它还在动」的按钮最让人困惑
+          removeWorkspaceToggle();
           clearTags();
           return;
         }
         if (isCollapsed()) {
           diag.disabled = "collapsed";
+          // 折叠态下 region 可能还在（不走 Windows 标题栏的平台只是把整列压窄，
+          // regionArea 并没有 display:none），那颗切换按钮也就还留在屏幕上，
+          // 文案必须跟着翻成「展开工作区」—— 它就是用户点回来的那条路。
+          // 首次进页面就已经是折叠态时按钮还不存在，这里补建一次（锚点在就建）。
+          if (wsToggleEl === null) {
+            const anchor = document.querySelector(SEL_WORKSPACES);
+            const box = anchor === null ? null : anchor.parentElement;
+            if (box !== null) ensureWorkspaceToggle(box);
+          }
+          refreshWorkspaceToggle();
           clearTags();
           return;
         }
@@ -1201,11 +1397,14 @@ window.__ModuleLoader__.load({
         const wsSlot = document.querySelector(SEL_WORKSPACES);
         if (wsSlot === null) {
           diag.anchors.region = false;
+          // 锚点整个没了 = 这个入口失去了它的立足点，跟着退场
+          removeWorkspaceToggle();
           clearTags();
           return;
         }
         const region = wsSlot.parentElement;
         if (region === null) {
+          removeWorkspaceToggle();
           clearTags();
           return;
         }
@@ -1233,6 +1432,10 @@ window.__ModuleLoader__.load({
           callModule("drag", "setNav", [nav], null);
         }
         region.setAttribute(ATTR_PART, "region");
+        // 工作区一键展开/收起：贴在会话区顶部。
+        // 折叠态下 sync() 会提前返回（region 被宿主 display:none），
+        // 那时这个入口不在场，展开动作由宿主自己的侧边栏按钮完成 —— 见 README「已知边界」。
+        ensureWorkspaceToggle(region);
 
         const brand = root.querySelector(SEL_BRAND);
         const logo = brand === null ? null : directChildOf(root, brand);
@@ -1394,6 +1597,7 @@ window.__ModuleLoader__.load({
       }
       callModule("drag", "cancel", [], null);
       callModule("settings", "closeEditor", [], null);
+      removeWorkspaceToggle();
       clearTags();
       callModule("settings", "clearHost", [], null);
       if (stylesDispose !== null) {

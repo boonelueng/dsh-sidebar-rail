@@ -1,6 +1,6 @@
 {
   "name": "dsh-sidebar-rail",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Parallel lanes for the DeepSeek Harness left sidebar: a narrow function rail on the left, the conversation list on the right, plus custom entries.",
   "type": "module",
   "main": "./index.mjs",
@@ -41,7 +41,7 @@
       "name": "DeepSeek Harness coding agent (AI)"
     }
   ],
-  "aiAssistance": "Implemented largely by an AI coding agent (DeepSeek Harness); requirements, technical decisions and final acceptance were made by the human maintainer. See the README section “关于 AI 参与”.",
+  "aiAssistance": "Implemented largely by an AI coding agent (DeepSeek Harness); requirements, technical decisions and final acceptance were made by the human maintainer. See the README section 鈥滃叧浜?AI 鍙備笌鈥?",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/boonelueng/dsh-sidebar-rail.git"

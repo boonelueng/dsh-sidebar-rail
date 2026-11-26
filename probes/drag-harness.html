@@ -75,6 +75,9 @@
     <div class="logoRow">
       <span data-slot="sidebar.brand.mark"></span>
       <span data-slot="sidebar.brand.name">HARNESS</span>
+      <!-- 复刻宿主自己的「收起侧边栏」按钮：0.2.2+ 靠 data-sidebar-toggle，
+           更老的版本只有 aria-label，插件对两条路径都做了探测。 -->
+      <button type="button" class="sidebarToggle" data-sidebar-toggle aria-label="收起侧边栏">‹</button>
     </div>
     <button class="newSession" type="button"><span class="newSessionContent">新会话</span></button>
     <nav class="panelList" aria-label="全局面板">
@@ -324,6 +327,30 @@
       if (btn === null) return;
       var panel = btn.closest('[data-shortcut-modal="settings"]');
       if (panel && panel.parentElement) panel.parentElement.remove();
+    });
+
+    // ---- 宿主侧边栏折叠（模拟 dsh-client-ui-layout 的 AppFrame）
+    // 真实宿主里折叠态由 React 的 layoutInfo.sidebar===0 驱动，DOM 上表现为：
+    //   frame 上加 [data-sidebar-collapsed]、宽度收到 collapsedWidth、
+    //   非 Windows 标题栏平台下 regionArea 仍在 DOM 里（只是被压窄）。
+    // 这里用最小可行复刻：切一个属性 + 改宽度，让插件能读到折叠状态。
+    var sidebarCollapsed = false;
+    window.__HARNESS__.setSidebarCollapsed = function (next) {
+      sidebarCollapsed = Boolean(next);
+      var col = document.getElementById("col");
+      if (sidebarCollapsed) col.setAttribute("data-sidebar-collapsed", "true");
+      else col.removeAttribute("data-sidebar-collapsed");
+      col.style.width = sidebarCollapsed ? "56px" : "280px";
+      // 模拟 React 提交后的重渲染：派发一次 DOM 变动，让插件的 observer 醒来
+      document.body.dispatchEvent(new Event("dsh-harness-collapse"));
+      return sidebarCollapsed;
+    };
+    window.__HARNESS__.sidebarCollapsed = function () { return sidebarCollapsed; };
+    // 宿主自己的折叠按钮：点一下就是切换（真实宿主里它会调 toggleSidebar）
+    document.addEventListener("click", function (event) {
+      if (!event.target || !event.target.closest) return;
+      if (event.target.closest("[data-sidebar-toggle]") === null) return;
+      window.__HARNESS__.setSidebarCollapsed(!sidebarCollapsed);
     });
   })();
 </script>
