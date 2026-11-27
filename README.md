@@ -334,7 +334,7 @@ DSH 的槽渲染器给每个槽套一层 `<div data-slot="<槽名>" style="displ
 
 | DSH 版本 | 并列布局 / 条目 / 拖拽 / 悬浮 | 设置页里的条目编辑 | 设置窗口拖动 |
 | --- | --- | --- | --- |
-| 0.2.0 及更早 | ✓ | ✗（没有 settings.section 槽） | ✗（没有 data-shortcut-modal 面板） |
+| 0.2.0 及更早 | ✓ | ✗（没有 `settings.section` 槽） | ✗（没有 `data-shortcut-modal` 面板） |
 | 0.2.1 系列 | ✓ | ✓ | ✓（走二级兜底） |
 | 0.2.2+ | ✓ | ✓ | ✓（走一级 grid-area） |
 
