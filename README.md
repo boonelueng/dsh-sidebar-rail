@@ -37,21 +37,6 @@
 
 DSH 原生侧栏在鼠标悬停面板行时会出现「从左侧栏取消固定」按钮。本插件会把这个按钮隐藏，防止面板从轨道消失；**「更多」菜单及其余操作仍完整保留**，因此仍可正常打开、管理和使用面板。
 
-## 一键展开 / 收起工作区
-
-工作区那一行的标题（「工作区」三个字旁边、搜索图标左侧）多了一颗小按钮：展开着的时候显示 **« 收起**，点一下把整块左侧栏收起；收起后再点它（或宿主自己的侧边栏按钮）就展开回来。同一个入口两个方向，不用记「现在该点哪个」。
-
-- **位置**：长在工作区的**标题行**里、紧挨搜索格左侧——和「工作区」分组标题、搜索图标、视图选项按钮同一行，不另占高度
-- **图标与文案**：图标是两条朝左的双尖折线，收起时整体翻面朝右表示「往外展开」；文案只有「收起」/「展开」两字，无障碍名才是完整的「收起工作区」/「展开工作区」。侧栏被压窄到放不下两个字时，文案自动隐藏、只留图标
-- **两套「展开」别混**：竖轨底部那个 **» / «**（见上一节）只管 40px 窄条要不要显示文字标签，是本插件自己的形态；这一颗管的是宿主整个左侧栏在不在屏幕上
-- **状态判定只读 DOM**：`[data-sidebar-collapsed]` 在就是收起、不在就是展开。不自己维护一份状态，所以不管你从哪条路径（这行按钮、宿主按钮、快捷键、窗口变窄）改的，显示都对
-- **驱动宿主三级兜底**，逐级降级，绝不假装成功：
-  1. `layout.toggleSidebar()` —— 0.1.7 → 0.2.3 全版本都有的服务方法，最干净
-  2. 点宿主自己的折叠按钮 —— `[data-sidebar-opener]`（0.2.2+ 侧栏外，收起态也点得到）→ `[data-sidebar-toggle]`（0.2.2+ 侧栏内）→ 按无障碍名认「侧边栏 + 开合」（老版本没有这两个属性时）
-  3. 都没有 → 按钮把自己**禁用**并把 `compat.wsToggle` 标成 `unsupported`，鼠标悬停给出说明。一个点了没反应的按钮比没有按钮更糟
-- **退场**：工作区锚点整个消失、或插件被 `dsh-sidebar-rail:off` 关掉时，这个入口跟着摘掉；只是折叠的话它留着（那正是点回来的路）
-- **诊断**：`__DSH_RAIL__.compat.wsToggle` = `ready` / `service` / `button` / `unsupported`，一眼看出这个宿主走的是哪条路
-
 ## 展开 / 收起功能区
 
 竖轨最底部是 **»**（展开）/ **«**（收起）按钮：
@@ -237,8 +222,7 @@ dsh plugin --profile web add github:boonelueng/dsh-sidebar-rail
 | `probes/float-probe.cjs` | 悬浮：进出悬浮态、自动展开/停靠自动收起、抓手出现、`translate3d` 拖动、坐标夹取与落盘、**首次落位即写盘**、**三段无缝衔接（含刷新后与 nav 长高后）**、刷新还原、双击停靠、缩窗口不跑丢、**拖动无长任务** |
 | `probes/window-probe.cjs` | 侧栏「从左侧栏取消固定」已隐藏、更多菜单仍保留；设置窗口普通无模糊材质、官方关闭按钮、任意非交互区域拖动、越界夹紧、标题栏双击不再最大化、关闭清理、真实鼠标拖动性能与帧间隔回归 |
 | `probes/features-probe.cjs` | 单一功能开关（拖动）渲染、持久化、刷新恢复、开关即时生效、无红绿灯与原生关闭按钮、诊断无异常 |
-| `probes/ws-toggle-probe.cjs` | 工作区一键展开/收起：入口长在标题行里且紧挨搜索框左侧、带图标、展开/收起文案互换、点一下真的折叠与展开、老版本没有 `[data-sidebar-workspace-header]` 时按结构兜底仍能落回原处、无重复堆积、宿主不支持时自我禁用、锚点消失后退场 |
-| `verify-compat.cjs` | 跨版本契约：把插件依赖的 24 条 DSH 契约（槽位锚点 / 折叠属性 / 设置面板属性 / grid-area / flex 兜底 / chunk 加载 / `__DSH_BOOT__.release` / `layout.toggleSidebar` / 侧栏开合按钮 / 工作区标题行与搜索框）逐条拿到多个 DSH 版本的真实产物上核对 |
+| `verify-compat.cjs` | 跨版本契约：把插件依赖的 18 条 DSH 契约（槽位锚点 / 折叠属性 / 设置面板属性 / grid-area / flex 兜底 / chunk 加载 / `__DSH_BOOT__.release`）逐条拿到多个 DSH 版本的真实产物上核对 |
 
 `drag-probe.cjs`、`float-probe.cjs`、`window-probe.cjs` 与 `features-probe.cjs` 自带静态回归台（`probes/drag-harness.html` 复刻 DSH 侧边栏与设置弹窗的 DOM 骨架 + 加载真实 `client.js`；`probes/features-harness.html` 在此基础上加了 `react` 桩与 `slots.inject` 留档，好让设置页那一节真能被挂起来），**不需要 DSH 进程**，直接 `node probes/float-probe.cjs` 即可，会自己起一个 headless Chrome。
 
@@ -329,10 +313,6 @@ DSH 的槽渲染器给每个槽套一层 `<div data-slot="<槽名>" style="displ
 | `settings.section` 槽 | 设置页里的「侧边栏条目」 | ✗ | ✗ | ✓ | ✓ |
 | `settings.section.icon` 槽 | 设置项图标 | ✗ | ✗ | ✗ | ✓ |
 | `__DSH_BOOT__.release.version` | 只进诊断，不作分支 | ✗ | ✗ | ✓ | ✓ |
-| `layout.toggleSidebar()` | 工作区一键展开/收起的主路径 | ✓ | ✓ | ✓ | ✓ |
-| `[data-sidebar-opener]` / `[data-sidebar-toggle]` | 收起/展开的按钮兜底路径 | ✗ | ✗ | ✗ | ✓ |
-| `[data-sidebar-workspace-header]` | 一键展开/收起入口找到工作区标题行 | ✗ | ✗ | ✗ | ✓ |
-| 标题行内有 `input`（搜索框） | 上一项缺失时按结构反推标题行 | ✓ | ✓ | ✓ | ✓ |
 
 **0.2.2-alpha.2 是分界线**：在那之前设置面板是 flex 布局（没有任何 `grid-area`），之后改成 CSS grid 命名区。插件原来只认 `grid-area`，所以在 0.2.1 及更早的版本上会直接放弃接管——窗口拖动完全失效，而且是静默的。
 
@@ -352,13 +332,13 @@ DSH 的槽渲染器给每个槽套一层 `<div data-slot="<槽名>" style="displ
 
 ### 各版本上的功能可用面
 
-| DSH 版本 | 并列布局 / 条目 / 拖拽 / 悬浮 | 设置页里的条目编辑 | 设置窗口拖动 | 工作区一键展开/收起 |
-| --- | --- | --- | --- | --- |
-| 0.2.0 及更早 | ✓ | ✗（没有 `settings.section` 槽） | ✗（没有 `data-shortcut-modal` 面板） | ✓（走 `layout.toggleSidebar()`） |
-| 0.2.1 系列 | ✓ | ✓ | ✓（走二级兜底） | ✓（走 `layout.toggleSidebar()`） |
-| 0.2.2+ | ✓ | ✓ | ✓（走一级 grid-area） | ✓（服务优先，按钮兜底） |
+| DSH 版本 | 并列布局 / 条目 / 拖拽 / 悬浮 | 设置页里的条目编辑 | 设置窗口拖动 |
+| --- | --- | --- | --- |
+| 0.2.0 及更早 | ✓ | ✗（没有 settings.section 槽） | ✗（没有 data-shortcut-modal 面板） |
+| 0.2.1 系列 | ✓ | ✓ | ✓（走二级兜底） |
+| 0.2.2+ | ✓ | ✓ | ✓（走一级 grid-area） |
 
-0.2.0 及更早那两列为 ✗ 不是 bug：那些版本压根没有官方设置弹窗，插件探不到面板就静默退回，不报错也不留痕。工作区一键展开/收起反而全版本可用 —— 它靠的是 `layout.toggleSidebar()`，这个方法从 0.1.7 到 0.2.3 一直存在。
+0.2.0 及更早那两列为 ✗ 不是 bug：那些版本压根没有官方设置弹窗，插件探不到面板就静默退回，不报错也不留痕。
 
 ### 诊断
 
@@ -368,7 +348,7 @@ DSH 的槽渲染器给每个槽套一层 `<div data-slot="<槽名>" style="displ
 JSON.stringify(window.__DSH_RAIL__.compat)
 // { dshVersion: "0.2.2-rc.5", slots: true, slotInject: true, slotRegister: true,
 //   requireAsync: true, ctxGet: true, ctxEffect: true,
-//   sidebarCollapsed: "expanded", railColumn: "parentElement", wsToggle: "ready", notes: [] }
+//   sidebarCollapsed: "expanded", railColumn: "parentElement", notes: [] }
 ```
 
 `notes` 里是「哪一层没长出来」的白话说明；`sidebarCollapsed` 是折叠态实测值（顺带证明那条探测点真的在跑）；`railColumn` 说明几何是量在哪个父节点上的。
@@ -376,7 +356,7 @@ JSON.stringify(window.__DSH_RAIL__.compat)
 ## 已知边界
 
 - 侧边栏宽度仍受 DSH 自身 264–420px 限制（本插件不改这个上限）。窗口很窄时会比较挤，此时可以收起侧边栏用原生形态。
-- 折叠态（56px）下不接管，保持原生图标条。此时工作区标题行里那颗「展开」按钮仍在（宿主只是把整列压窄、没有隐藏它），点它就能展开回来；如果你用的宿主版本在折叠态把整个 region 都藏了，那就用宿主自己的侧边栏按钮。
+- 折叠态（56px）下不接管，保持原生图标条。此时要展开回来请用宿主自己的侧边栏按钮（侧栏外那颗「打开侧边栏」在折叠态也能点）。
 - 悬浮态是**浮层**，不参与 DSH 布局：它会盖在页面内容上面。默认落在视口右侧空白处，若你想让它出现在别处，拖过去即可。
 - 悬浮会顺带把展开态打开（停靠时关回去）。如果你更想保持 40px 纯图标条漂浮，进去后手动点一下 `«` 收起即可，位置不会丢。
 - 依赖 `[data-slot="sidebar.workspaces"]` 等锚点；DSH 若大改侧边栏结构，`__DSH_RAIL__.anchors` 会指出哪一项失效，此时插件自动退回原生布局而不会破坏界面。

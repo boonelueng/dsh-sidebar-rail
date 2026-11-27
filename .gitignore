@@ -22,4 +22,3 @@ probes/rel*/
 node_modules/
 
 commit-msg*.txt
-ws-toggle-probe-result.json

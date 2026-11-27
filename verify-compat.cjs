@@ -47,8 +47,6 @@ const VERSIONS = [
  *   cm = dsh-client-modules（chunk 加载 / __DSH_BOOT__）
  *   sl = dsh-client-ui-slots（inject/register 契约，随 runner 提供）
  *   conv= dsh-client-ui-conversation（conversation.input.left 槽）
- *   lay = dsh-client-ui-layout（AppFrame / [data-sidebar-collapsed] / layout 服务）
- *   ws  = dsh-client-ui-workspace（工作区标题行与搜索框）
  */
 const PACKAGES = {
   sidebar: "v",
@@ -58,8 +56,6 @@ const PACKAGES = {
   clientModules: "cm",
   slots: "sl",
   conversation: "conv",
-  layout: "lay",
-  workspace: "ws",
 };
 
 /** 各包可能的主源码文件名（编译产物不统一，有的叫 client.js，有的叫 index.js） */
@@ -235,53 +231,6 @@ const CONTRACTS = [
     what: "slots.inject / slots.register 契约",
     where: "client.js:apply() 槽位注册",
     probe: (src) => /inject/.test(src) && /register/.test(src),
-  },
-  {
-    id: "host.layout.toggleSidebar",
-    pkg: "layout",
-    what: "layout 服务的 toggleSidebar()（工作区一键展开/收起的主路径）",
-    where: "client.js:toggleWorkspace() ① 服务优先",
-    probe: (src) => /toggleSidebar/.test(src),
-  },
-  {
-    id: "dom.data-sidebar-opener",
-    pkg: "sidebar",
-    what: "[data-sidebar-opener]（0.2.2+ 侧栏外的打开按钮，折叠态也能点）",
-    where: "client.js:findSidebarToggleButton() ①",
-    optional: true,
-    probe: (src) => /data-sidebar-opener/.test(src),
-  },
-  {
-    id: "dom.data-sidebar-toggle",
-    pkg: "sidebar",
-    what: "[data-sidebar-toggle]（0.2.2+ 侧栏内的收起按钮）",
-    where: "client.js:findSidebarToggleButton() ②",
-    optional: true,
-    probe: (src) => /data-sidebar-toggle/.test(src),
-  },
-  {
-    id: "i18n.toggle-labels",
-    pkg: "sidebar",
-    what: "官方折叠按钮的 aria-label 文案（toggle.open / toggle.collapse）",
-    where: "client.js:findSidebarToggleButton() ③ 无障碍名兜底",
-    optional: true,
-    probe: (src) => /toggle\.open|toggle\.collapse/.test(src),
-  },
-  {
-    id: "dom.data-sidebar-workspace-header",
-    pkg: "workspace",
-    what: "[data-sidebar-workspace-header]（0.2.2+ 工作区标题行，一键展开/收起入口的落脚点）",
-    where: "client.js:findWorkspaceHeader() ① 直接命中",
-    optional: true,
-    probe: (src) => /data-sidebar-workspace-header/.test(src),
-  },
-  {
-    id: "dom.workspace-search-input",
-    pkg: "workspace",
-    what: "标题行里的搜索框（上面那个属性缺失时，靠 input 反推标题行与插入位）",
-    where: "client.js:findWorkspaceHeader() ② / findSearchSlot()",
-    optional: true,
-    probe: (src) => /searchInput/.test(src),
   },
 ];
 

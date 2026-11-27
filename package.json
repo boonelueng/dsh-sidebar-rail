@@ -1,6 +1,6 @@
 {
   "name": "dsh-sidebar-rail",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "description": "Parallel lanes for the DeepSeek Harness left sidebar: a narrow function rail on the left, the conversation list on the right, plus custom entries.",
   "type": "module",
   "main": "./index.mjs",
