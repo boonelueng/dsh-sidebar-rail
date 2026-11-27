@@ -47,6 +47,8 @@ const VERSIONS = [
  *   cm = dsh-client-modules（chunk 加载 / __DSH_BOOT__）
  *   sl = dsh-client-ui-slots（inject/register 契约，随 runner 提供）
  *   conv= dsh-client-ui-conversation（conversation.input.left 槽）
+ *   lay = dsh-client-ui-layout（AppFrame / [data-sidebar-collapsed] / layout 服务）
+ *   ws  = dsh-client-ui-workspace（工作区标题行与搜索框）
  */
 const PACKAGES = {
   sidebar: "v",
@@ -57,6 +59,7 @@ const PACKAGES = {
   slots: "sl",
   conversation: "conv",
   layout: "lay",
+  workspace: "ws",
 };
 
 /** 各包可能的主源码文件名（编译产物不统一，有的叫 client.js，有的叫 index.js） */
@@ -263,6 +266,22 @@ const CONTRACTS = [
     where: "client.js:findSidebarToggleButton() ③ 无障碍名兜底",
     optional: true,
     probe: (src) => /toggle\.open|toggle\.collapse/.test(src),
+  },
+  {
+    id: "dom.data-sidebar-workspace-header",
+    pkg: "workspace",
+    what: "[data-sidebar-workspace-header]（0.2.2+ 工作区标题行，一键展开/收起入口的落脚点）",
+    where: "client.js:findWorkspaceHeader() ① 直接命中",
+    optional: true,
+    probe: (src) => /data-sidebar-workspace-header/.test(src),
+  },
+  {
+    id: "dom.workspace-search-input",
+    pkg: "workspace",
+    what: "标题行里的搜索框（上面那个属性缺失时，靠 input 反推标题行与插入位）",
+    where: "client.js:findWorkspaceHeader() ② / findSearchSlot()",
+    optional: true,
+    probe: (src) => /searchInput/.test(src),
   },
 ];
 

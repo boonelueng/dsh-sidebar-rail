@@ -131,21 +131,45 @@ async function main() {
       const btn = document.querySelector('[data-dsh-rail-ws-toggle]');
       const region = document.querySelector('[data-dsh-rail-part="region"]');
       const wsSlot = document.querySelector('[data-slot="sidebar.workspaces"]');
+      const header = (function(){
+        const marked = document.querySelector('[data-sidebar-workspace-header]');
+        if (marked) return marked;
+        // 老版本没有标记属性：和插件一样按结构反推 —— 从搜索框往上爬到锚点的直接子节点
+        if (!wsSlot) return null;
+        const input = wsSlot.querySelector('input');
+        if (!input) return null;
+        let n = input;
+        while (n && n.parentElement !== wsSlot) n = n.parentElement;
+        return n;
+      })();
+      const searchSlot = header ? header.querySelector('input') &&
+        (function(){ let n = header.querySelector('input'); while (n && n.parentElement !== header) n = n.parentElement; return n; })() : null;
       const box = (n) => { if (!n) return null; const r = n.getBoundingClientRect();
         return {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}; };
       const d = window.__DSH_RAIL__ || {};
+      const kids = header ? Array.prototype.slice.call(header.children) : [];
       return {
         exists: btn !== null,
         box: box(btn),
         regionBox: box(region),
         wsSlotBox: box(wsSlot),
-        // 入口必须真的长在工作区那个容器里，不是被挂到别的地方
+        headerBox: box(header),
+        // 入口必须真的挂在「工作区标题行」里，与搜索框同一行
+        inHeader: btn !== null && header !== null && header.contains(btn),
         inRegion: btn !== null && region !== null && region.contains(btn),
-        // 并且是容器的第一个交互元素（视觉上属于「这一块的头」）
-        isFirstChild: btn !== null && btn.parentElement !== null && btn.parentElement.firstElementChild === btn,
+        // 必须紧挨在搜索格左侧（索引上正好前一位）
+        beforeSearch: btn !== null && searchSlot !== null &&
+          kids.indexOf(btn) === kids.indexOf(searchSlot) - 1,
+        // 与搜索框纵向重叠：同一行，而不是掉到下一行
+        sameRowAsSearch: (function(){
+          if (!btn || !searchSlot) return false;
+          const a = btn.getBoundingClientRect(); const b = searchSlot.getBoundingClientRect();
+          return a.top < b.bottom && b.top < a.bottom;
+        })(),
         label: btn ? btn.getAttribute('aria-label') : null,
         title: btn ? btn.title : null,
-        text: btn ? btn.textContent : null,
+        text: btn ? (btn.querySelector('.dsr-ws-toggle-text') || {}).textContent || '' : null,
+        hasIcon: btn ? btn.querySelector('.dsr-ws-toggle-ico') !== null : false,
         disabled: btn ? btn.disabled : null,
         pressed: btn ? btn.getAttribute('aria-pressed') : null,
         collapsed: window.__HARNESS__.sidebarCollapsed(),
@@ -156,15 +180,22 @@ async function main() {
 
     // ------------------------------------------------ 1. 入口就该在这儿
     result.steps.initial = await probe();
-    check("工作区顶部出现一键展开/收起入口", result.steps.initial.exists, result.steps.initial.box);
-    check("入口长在工作区容器里（不是飘在别处）", result.steps.initial.inRegion, {
-      inRegion: result.steps.initial.inRegion,
-      regionBox: result.steps.initial.regionBox,
+    check("工作区标题行出现一键展开/收起入口", result.steps.initial.exists, result.steps.initial.box);
+    check("入口长在工作区标题行里（不是另起一行、也不是飘在别处）",
+      result.steps.initial.inHeader, {
+        inHeader: result.steps.initial.inHeader,
+        headerBox: result.steps.initial.headerBox,
+        box: result.steps.initial.box,
+      });
+    check("入口紧挨在搜索框左侧", result.steps.initial.beforeSearch, result.steps.initial.box);
+    check("入口与搜索框在同一行（纵向重叠）", result.steps.initial.sameRowAsSearch, {
+      box: result.steps.initial.box,
     });
-    check("入口是工作区容器的第一个元素（视觉上属于这一块的头）",
-      result.steps.initial.isFirstChild, result.steps.initial.label);
-    check("展开态文案是「收起工作区」", result.steps.initial.label === "收起工作区",
-      { label: result.steps.initial.label, title: result.steps.initial.title });
+    check("入口带展开/收起图标", result.steps.initial.hasIcon, result.steps.initial.hasIcon);
+    check("展开态文案是「收起」", result.steps.initial.text === "收起",
+      { text: result.steps.initial.text, title: result.steps.initial.title });
+    check("展开态无障碍名是完整的「收起工作区」", result.steps.initial.label === "收起工作区",
+      result.steps.initial.label);
     check("展开态 aria-pressed=true", result.steps.initial.pressed === "true", result.steps.initial.pressed);
     check("入口没有被禁用（宿主提供了切换路径）", result.steps.initial.disabled === false,
       { disabled: result.steps.initial.disabled, compat: result.steps.initial.compat });
@@ -182,9 +213,13 @@ async function main() {
         colWidth: result.steps.collapsed.colWidth,
       });
     check("收起后侧栏明显变窄", result.steps.collapsed.colWidth < 100, result.steps.collapsed.colWidth);
-    check("收起后文案翻成「展开工作区」", result.steps.collapsed.label === "展开工作区",
+    check("收起后文案翻成「展开」", result.steps.collapsed.text === "展开",
+      { text: result.steps.collapsed.text, title: result.steps.collapsed.title });
+    check("收起后无障碍名是完整的「展开工作区」", result.steps.collapsed.label === "展开工作区",
       result.steps.collapsed.label);
     check("收起后 aria-pressed=false", result.steps.collapsed.pressed === "false", result.steps.collapsed.pressed);
+    check("收起后入口仍在标题行里（那是点回来的路）",
+      result.steps.collapsed.inHeader === true, result.steps.collapsed.inHeader);
     await shot("shot-ws-toggle-collapsed.png");
 
     // ------------------------------------------------ 3. 再点一下 → 展开
@@ -194,9 +229,32 @@ async function main() {
     check("再点一下就展开回来（折叠态已解除）",
       result.steps.reexpanded.collapsed === false, result.steps.reexpanded.collapsed);
     check("展开后侧栏恢复原宽", result.steps.reexpanded.colWidth > 200, result.steps.reexpanded.colWidth);
-    check("展开后文案回到「收起工作区」", result.steps.reexpanded.label === "收起工作区",
-      result.steps.reexpanded.label);
+    check("展开后文案回到「收起」", result.steps.reexpanded.text === "收起",
+      result.steps.reexpanded.text);
     check("来回切换没有重复堆积入口（DOM 里只有一个）",
+      (await evalJs("document.querySelectorAll('[data-dsh-rail-ws-toggle]').length")) === 1,
+      await evalJs("document.querySelectorAll('[data-dsh-rail-ws-toggle]').length"));
+
+    // ------------------------------------------------ 3b. 老版本宿主：没有那个 data 属性
+    // 0.2.1 及更早的工作区标题行没有 data-sidebar-workspace-header，插件只能按结构
+    // 反推（从搜索框往上爬到锚点的直接子节点）。这里把它摘掉，看入口还能不能落回原处。
+    await evalJs(`(() => {
+      const head = document.querySelector('[data-sidebar-workspace-header]');
+      if (head) head.removeAttribute('data-sidebar-workspace-header');
+      window.__HARNESS__.notifyMount();
+      return true;
+    })()`);
+    await sleep(700);
+    result.steps.legacy = await probe();
+    check("没有 data-sidebar-workspace-header 的老宿主里也能定位到标题行",
+      result.steps.legacy.inHeader === true, {
+        inHeader: result.steps.legacy.inHeader,
+        headerBox: result.steps.legacy.headerBox,
+        box: result.steps.legacy.box,
+      });
+    check("老宿主里仍紧挨在搜索框左侧", result.steps.legacy.beforeSearch === true,
+      { beforeSearch: result.steps.legacy.beforeSearch, box: result.steps.legacy.box });
+    check("老宿主里没有堆出第二个入口",
       (await evalJs("document.querySelectorAll('[data-dsh-rail-ws-toggle]').length")) === 1,
       await evalJs("document.querySelectorAll('[data-dsh-rail-ws-toggle]').length"));
 

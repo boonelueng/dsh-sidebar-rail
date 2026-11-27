@@ -20,6 +20,20 @@
   .panelTitle { white-space: nowrap; }
   .regionArea { flex: 1; min-height: 0; display: flex; flex-direction: column;
                 overflow: hidden; margin-left: -4px; padding-left: 4px; }
+  /* 工作区浏览器：复刻 dsh-client-ui-workspace 的 WorkspaceBrowser 结构 ——
+     根容器 > [标题行(分组标题 + 搜索格 + 动作按钮), 会话列表]。 */
+  .wsBrowser { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  .wsHeader { display: flex; align-items: center; gap: 4px; height: 30px; flex: none; }
+  .wsLabel { font-size: 12px; color: #666; white-space: nowrap; flex: 1; min-width: 0; }
+  .wsSearchSlot { flex: 1; min-width: 0; display: flex; justify-content: flex-end; }
+  .wsSearch { display: flex; align-items: center; gap: 3px; height: 24px; max-width: 28px;
+              overflow: hidden; border-radius: 6px; }
+  .wsSearchIcon { font-size: 11px; color: #888; }
+  .wsSearchInput { width: 0; min-width: 0; border: 0; outline: 0; background: 0 0;
+                   font: inherit; font-size: 12px; opacity: 0; }
+  .wsActions { display: flex; align-items: center; gap: 2px; flex: none; }
+  .wsActionBtn { width: 24px; height: 24px; border: 0; background: 0 0; border-radius: 6px;
+                 cursor: pointer; color: #666; font-size: 11px; }
   .sessionList { flex: 1; min-height: 0; overflow: auto; }
   .sessionRow { height: 32px; display: flex; align-items: center; padding: 0 8px;
                 border-radius: 8px; color: #333; }
@@ -109,10 +123,24 @@
       </button>
     </nav>
     <div class="regionArea">
-      <div class="sessionList" data-slot="sidebar.workspaces">
-        <div class="sessionRow">会话一</div>
-        <div class="sessionRow">会话二</div>
-        <div class="sessionRow">会话三</div>
+      <div class="wsBrowser" data-slot="sidebar.workspaces">
+        <div class="wsHeader" data-sidebar-workspace-header>
+          <span class="wsLabel">工作区</span>
+          <div class="wsSearchSlot">
+            <div class="wsSearch">
+              <span class="wsSearchIcon">&#9906;</span>
+              <input type="text" class="wsSearchInput" placeholder="搜索会话名称" aria-label="搜索会话">
+            </div>
+          </div>
+          <div class="wsActions">
+            <button class="wsActionBtn" type="button" aria-label="会话视图选项">&#9776;</button>
+          </div>
+        </div>
+        <div class="sessionList">
+          <div class="sessionRow">会话一</div>
+          <div class="sessionRow">会话二</div>
+          <div class="sessionRow">会话三</div>
+        </div>
       </div>
     </div>
     <div class="footArea">
